@@ -122,11 +122,24 @@ def test_fatal_tier_yields_parse_failed(rule: str) -> None:
         "duplicate_pin_event_in_cycle_first_wins",
         "reserved_word_as_identifier",
         "failsummary_count_mismatch",
+        "failsummary_vector_list_mismatch",
     ],
 )
 def test_recoverable_tier_yields_warning_and_deterministic_rule(rule: str) -> None:
     """Warning text carries the source line, and the recovery rule is
     deterministic — not "whatever the dict happened to keep"."""
+
+
+def test_failsummary_count_is_pin_granular_not_vector_granular() -> None:
+    """multi_fail block 1 declares `FAILSUMMARY 10 VECTORS 1200,1201,1202,4400,
+    4401`: 10 failing COMPARE LINES across 5 distinct vectors.  A validator that
+    conflated the two would warn on a correct log — so assert the well-formed
+    golden produces NO FAILSUMMARY warning."""
+
+
+def test_failsummary_checks_are_reported_as_separate_warnings() -> None:
+    """A log with a right count and a wrong VECTORS list must warn about the
+    vector list ONLY, naming which witness disagreed."""
 
 
 def test_model_invariants_are_not_delegated_to_the_validator() -> None:

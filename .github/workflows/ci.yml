@@ -21,7 +21,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        # 3.10 is the declared floor (dataclass slots=True, bisect key=, PEP 604
+        # at runtime all land there) and has never yet executed - a green run on
+        # it is a Step 1 gate condition. 3.14 is the local development version.
+        python-version: ["3.10", "3.12", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +33,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
       - name: Install
-        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+        run: pip install -e ".[dev]"
 
       - name: pytest
         run: pytest -v
@@ -87,30 +93,15 @@ jobs:
         run: .\.venv-offline\Scripts\python.exe tools/smoke_offline.py
 
       # Verification item 6: the zipapp must run from a venv with NOTHING
-      # pip-installed - the true single-file deployment.
-      - name: Zipapp launch from a bare venv (nothing pip-installed)
+      # pip-installed - the true single-file deployment. The proof lives in a
+      # real script rather than an inline `python -c`, because a multi-line -c
+      # inside a YAML block carries the YAML indentation into Python and dies
+      # with IndentationError.
+      - name: Zipapp proof from a bare venv (nothing pip-installed)
         shell: pwsh
         run: |
           python -m venv .venv-bare
-          .\.venv-bare\Scripts\python.exe -c "
-          import importlib.util, sys
-          if importlib.util.find_spec('lark'):
-              sys.exit('bare venv already has lark - the zipapp proof would be meaningless')
-          print('confirmed: bare venv has no lark')
-          "
-          .\.venv-bare\Scripts\python.exe dist/ate_fa_suite.pyz
-
-      - name: Zipapp must serve the grammar from inside the archive
-        shell: pwsh
-        run: |
-          .\.venv-bare\Scripts\python.exe -c "
-          import sys
-          sys.path.insert(0, 'dist/ate_fa_suite.pyz')
-          from ate_fa_suite.parsing.parser import build_parser, load_grammar_text
-          assert 'cycle_batch' in load_grammar_text()
-          build_parser().parse('END LOG\n', start='end_log')
-          print('grammar + lark both load from inside the zipapp')
-          "
+          .\.venv-bare\Scripts\python.exe tools/check_zipapp.py dist/ate_fa_suite.pyz
 
       - uses: actions/upload-artifact@v4
         with:

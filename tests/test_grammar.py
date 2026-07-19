@@ -131,6 +131,58 @@ def test_multi_fail_has_a_repeated_block_name(multi_fail_text: str) -> None:
     assert multi_fail_text.count("TESTBLOCK mbist_march_c") == 2
 
 
+def test_multi_fail_failsummary_arithmetic_is_self_consistent(
+    parser: Lark, multi_fail_text: str
+) -> None:
+    """Every FAILSUMMARY in the golden agrees with the records below it.
+
+    The count is **pin-granular** — failing COMPARE LINES, so one vector with
+    three failing pins contributes three — while VECTORS enumerates the
+    **distinct** vectors having at least one FAIL.  The two are related but not
+    equal, and block 1 (10 compare lines across 5 vectors) is the canonical
+    worked example of the difference.
+
+    This runs in Step 0 so that editing the golden breaks loudly here, rather
+    than silently invalidating Step 2's validator fixtures.
+    """
+    tree = parser.parse(multi_fail_text, start="document")
+    seen: list[tuple[int, tuple[int, ...]]] = []
+
+    for block in tree.find_data("testblock"):
+        fail_lines = 0
+        fail_vectors: list[int] = []
+        for cycle in block.find_data("cycle"):
+            vector = int(str(cycle.children[0]))
+            failing = [
+                c
+                for c in cycle.find_data("compare")
+                if str(c.children[3]) == "FAIL"
+            ]
+            fail_lines += len(failing)
+            if failing:
+                fail_vectors.append(vector)
+
+        declared = list(block.find_data("failsummary"))
+        if not declared:
+            assert fail_lines == 0, "a failing block must declare FAILSUMMARY"
+            continue
+
+        count = int(str(declared[0].children[0]))
+        vectors = tuple(
+            int(str(v)) for v in declared[0].children[1].children  # type: ignore[union-attr]
+        )
+        assert count == fail_lines, f"declared {count}, observed {fail_lines}"
+        assert vectors == tuple(fail_vectors)
+        seen.append((count, vectors))
+
+    # Block 1 is the worked example: count != len(vectors), deliberately.
+    assert (10, (1200, 1201, 1202, 4400, 4401)) in seen
+    assert any(count != len(vectors) for count, vectors in seen), (
+        "the golden must contain a block where the pin-granular count differs "
+        "from the vector count, or it stops demonstrating the distinction"
+    )
+
+
 def test_generated_corpus_parses(parser: Lark, tmp_path) -> None:  # type: ignore[no-untyped-def]
     """PROJECT_PLAN Verification item 3, as a test rather than a manual step."""
     from tools.gen_log import write_log

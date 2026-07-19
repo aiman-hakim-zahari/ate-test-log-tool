@@ -135,10 +135,25 @@ END TESTBLOCK
 `VECTORS` requires at least one vector, a zero-failure block simply omits the
 record; there is no "zero" spelling.
 
-`<count>` is the number of **`FAIL` compare lines** in the block, not the number
-of failing vectors. It is cross-checked against the actual `FAIL` lines: real
-datalogs contain such inconsistencies, and a mismatch is **recoverable** —
-warned, never fatal, never silently corrected.
+`FAILSUMMARY` carries **two independently checkable claims**:
+
+* **`<count>` is the number of failing *compare lines*** in the block —
+  pin-granular. One vector with three failing pins contributes **three**, not
+  one. It is cross-checked against the observed `FAIL` records.
+* **The `VECTORS` list enumerates the distinct failing vectors** — one entry per
+  vector having at least one `FAIL`, regardless of how many pins failed on it.
+  It is cross-checked against the observed set of such vectors.
+
+So the two numbers are related but not equal, and disagree whenever any vector
+fails on more than one pin. In `sample_logs/multi_fail.atelog` the first
+invocation of `mbist_march_c` declares `FAILSUMMARY 10 VECTORS
+1200,1201,1202,4400,4401` — **10 failing compare lines across 5 distinct
+vectors**, which is the canonical worked example of the distinction.
+
+Both mismatches are **recoverable**: warned, never fatal, never silently
+corrected. Real datalogs contain exactly these inconsistencies, and detecting
+them is a feature — the declared summary and the observed records are two
+independent witnesses, and when they disagree the FA engineer needs to know.
 
 ### 4.5 Cycles
 
@@ -265,7 +280,11 @@ behaviour.
 | Tier | Result | Rules |
 |---|---|---|
 | **Fatal** | `ParseFailed` | unsupported major version; missing/duplicate metadata key; unparseable `TIMESCALE`; non-strictly-increasing vector or time within a block invocation |
-| **Recoverable** | `TestRun.warnings` + a deterministic rule | duplicate `PINDEF` (first wins); event on an undeclared pin (auto-declare `IO`); duplicate pin event in one cycle (first wins); reserved word used as an identifier; `FAILSUMMARY` count mismatch; `INCONSISTENT` records; non-masked `PASS` with disagreeing states |
+| **Recoverable** | `TestRun.warnings` + a deterministic rule | duplicate `PINDEF` (first wins); event on an undeclared pin (auto-declare `IO`); duplicate pin event in one cycle (first wins); reserved word used as an identifier; `FAILSUMMARY` **count** mismatch (declared vs observed failing compare lines); `FAILSUMMARY` **`VECTORS`** mismatch (declared vs observed set of vectors with ≥1 `FAIL`); `INCONSISTENT` records; non-masked `PASS` with disagreeing states |
+
+The two `FAILSUMMARY` checks are separate warnings, not one combined check — a
+log can easily get the count right and the vector list wrong, or vice versa, and
+collapsing them would hide which witness disagreed.
 
 Structural invariants of `WaveformSegment`, `WaveformSeries` and `TimingSet` are
 **not** validated here. They live in the model as `__post_init__` checks raising

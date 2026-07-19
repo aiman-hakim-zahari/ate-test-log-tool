@@ -18,6 +18,7 @@ Legend: `[x]` done · `[ ]` outstanding.
 - [x] `tools/gen_log.py` — deterministic generator + property-test oracle
 - [x] `tools/build_release.py` — wheelhouse + single-file zipapp
 - [x] `tools/smoke_offline.py` — offline install proof, refuses a source tree
+- [x] `tools/check_zipapp.py` — zipapp proof, refuses when ambient Lark exists
 - [x] Import firewall (AST-based) installed and passing
 - [x] `pyproject.toml` with `atelog.lark` as package data; CI workflow
 - [x] Verification items 1–6 all pass, including offline `--no-index` install
@@ -55,6 +56,10 @@ cycle-count assertion, one malformed golden per validation rule.
   - [ ] Truncated golden: exactly **3** recovered cycles + absolute warning line
 - [ ] M7. Two-tier semantic validator (fatal → `ParseFailed`, recoverable →
       `TestRun.warnings` + a deterministic rule); one malformed golden per rule
+  - [ ] `FAILSUMMARY` **count** vs observed failing compare lines (pin-granular)
+  - [ ] `FAILSUMMARY` **`VECTORS`** vs the observed set of vectors with ≥1 `FAIL`
+        — a separate warning from the count check, so it stays visible which
+        witness disagreed
 
 ---
 

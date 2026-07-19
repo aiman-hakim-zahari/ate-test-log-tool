@@ -94,6 +94,7 @@ or, with no pip at all:
 
 ```bash
 python dist/ate_fa_suite.pyz
+python tools/check_zipapp.py dist/ate_fa_suite.pyz   # proves Lark + grammar ship inside the archive
 ```
 
 `--no-index` is the point: any dependency missing from the wheelhouse fails

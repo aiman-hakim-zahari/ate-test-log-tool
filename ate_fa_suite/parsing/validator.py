@@ -17,7 +17,17 @@ Recoverable -> ``TestRun.warnings`` + a deterministic rule
     * duplicate pin event for a pin in one cycle  -> first wins;
     * reserved word used as an identifier where the contextual lexer happened
       to accept it;
-    * ``FAILSUMMARY`` count mismatches.
+    * ``FAILSUMMARY`` mismatches — **two separate checks**, because the record
+      makes two independently checkable claims (§3.1):
+
+      - declared *count* vs observed failing **compare lines** (pin-granular:
+        one vector with three failing pins contributes three);
+      - declared ``VECTORS`` vs the observed **set of vectors** with >= 1
+        ``FAIL``.
+
+      They are reported as distinct warnings rather than one combined check: a
+      log can get the count right and the vector list wrong, or vice versa, and
+      collapsing them would hide which witness disagreed.
 
 ``WaveformSegment`` / ``WaveformSeries`` / ``TimingSet`` structural invariants
 are deliberately *not* validated here: they live in the model itself as

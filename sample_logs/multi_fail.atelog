@@ -63,6 +63,10 @@ PIN CLK DRV 1
 PIN DQ0 EXP 1 GOT Z FAIL
 PIN TDO EXP Z GOT 1 FAIL      // expected Z, captured strong 1 -> OTHER
 END CYCLE
+// The canonical worked example of the FAILSUMMARY distinction: the count is
+// pin-granular (10 failing COMPARE LINES) while VECTORS enumerates the 5
+// distinct vectors that had at least one FAIL. The two numbers are related but
+// not equal, and disagree whenever a vector fails on more than one pin.
 FAILSUMMARY 10 VECTORS 1200,1201,1202,4400,4401
 END TESTBLOCK
 

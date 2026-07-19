@@ -37,6 +37,10 @@ from ate_fa_suite.model.entities import (
 )
 
 #: Retention half-width, in vectors, around each failure (§6.1 item 3b).
+#:
+#: This is a DEFAULT ONLY. ``W`` is a parameter of ``build_waves``; nothing
+#: inside the builder may read this global directly, or ``W`` stops being
+#: tunable per call and the retention tests lose their ability to drive it.
 DEFAULT_RETENTION_W: Final = 32
 
 
@@ -84,6 +88,9 @@ def build_waves(
     tuple[WaveformSeries, ...],
 ]:
     """Assemble ``(driven_waves, expected_waves, captured_waves)`` for a block.
+
+    ``retention_w`` is the +-W half-width in vectors.  It is a parameter, not a
+    module global read from inside — callers and tests must be able to drive it.
 
     Each returned tuple is sorted and unique by ``WaveKey``, as
     ``TestRun.__post_init__`` requires.
