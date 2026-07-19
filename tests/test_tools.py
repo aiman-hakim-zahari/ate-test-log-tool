@@ -1,10 +1,4 @@
-"""Tests for the developer tools.
-
-They are not shipped, but they are load-bearing: ``gen_log`` is the property-test
-oracle (a generator that emits a malformed log invalidates every test that uses
-it) and ``build_release`` produces the artifacts the offline deployment claims
-rest on.
-"""
+"""Tests for the log generator and release builder."""
 
 from __future__ import annotations
 
@@ -22,10 +16,7 @@ from tools import build_release, gen_log
 
 @pytest.mark.parametrize("period", [0, -1, -1000])
 def test_generate_rejects_non_positive_period(period: int) -> None:
-    """`period=0` emits every cycle at T=0 and a negative period emits negative
-    timestamps the grammar cannot lex.  Either way the function would break its
-    promise to produce a well-formed log, and both would trip the monotonic-time
-    fatal check once M7 lands."""
+    """Generated cycle times must increase."""
     with pytest.raises(ValueError, match="period"):
         gen_log.generate(
             io.StringIO(), cycles=10, pins=4, fail_rate=0.0, seed=1, period=period
@@ -80,9 +71,7 @@ def test_generated_log_survives_a_non_default_period() -> None:
 
 
 def test_release_modes_are_mutually_exclusive() -> None:
-    """Passing both flags previously skipped BOTH builds, printed the
-    verification instructions and exited 0 — a no-op indistinguishable from a
-    successful build, which is the worst possible outcome for a release tool."""
+    """Conflicting single-artifact flags must fail."""
     with pytest.raises(SystemExit) as exc:
         build_release.main(["--wheelhouse-only", "--zipapp-only"])
     assert exc.value.code == 2  # argparse usage error, not a success exit

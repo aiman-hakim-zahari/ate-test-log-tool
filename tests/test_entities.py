@@ -1,11 +1,4 @@
-"""Entity tests — these PASS in Step 0.
-
-``model/entities.py`` is complete per §4, so its invariants are testable now.
-The invariants are deliberately enforced in ``__post_init__`` raising
-``ValueError`` rather than by ``assert`` (which vanishes under ``python -O``) or
-by builder-side checks (which do not guard alternate construction paths) — so
-these tests exercise them by direct construction.
-"""
+"""Tests for immutable domain objects and their invariants."""
 
 from __future__ import annotations
 
@@ -243,9 +236,7 @@ def test_test_run_requires_unique_timing_set_names() -> None:
 
 
 def test_wave_collections_stay_provenance_separated() -> None:
-    """Three collections, never merged: DRV is programmed stimulus, GOT is a
-    comparator observation.  The same WaveKey may legitimately appear in all
-    three — which is only possible because they are separate tuples."""
+    """The same key may exist independently in all three signal sources."""
     series = WaveformSeries(BLOCK, "DQ0", (WaveformSegment(0, 1, (0,), (LOW,)),))
     run = _run(
         driven_waves=(series,),

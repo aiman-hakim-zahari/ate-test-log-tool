@@ -1,19 +1,4 @@
-"""Build the two fab-floor deployment artifacts (§1.2 differentiator 5).
-
-Semiconductor lab PCs are offline and admin-locked.  Two artifacts cover that:
-
-``dist/wheelhouse/``
-    The app wheel plus every dependency wheel (just Lark).  Installed with
-    ``pip install --no-index --find-links dist/wheelhouse ate-fa-suite`` — the
-    ``--no-index`` is the whole point: anything missing from the wheelhouse
-    fails **loudly** instead of being silently downloaded.
-
-``dist/ate_fa_suite.pyz``
-    A single-file zipapp bundling Lark, runnable on the machine's stock Python
-    with no pip at all.  The true single-file deployment.
-
-Both are exercised offline in CI on ``windows-latest``.
-"""
+"""Build the offline wheelhouse and single-file zipapp."""
 
 from __future__ import annotations
 
@@ -38,7 +23,7 @@ def _run(args: Sequence[str]) -> None:
 
 
 def build_wheelhouse() -> Path:
-    """``pip wheel .`` — resolves and builds the app wheel *and* Lark's."""
+    """Build the app and dependency wheels for offline installation."""
     if WHEELHOUSE.exists():
         shutil.rmtree(WHEELHOUSE)
     WHEELHOUSE.mkdir(parents=True)
@@ -53,13 +38,7 @@ def build_wheelhouse() -> Path:
 
 
 def build_zipapp() -> Path:
-    """Stage app + deps into one directory, then zip it into a ``.pyz``.
-
-    ``pip install --target`` is what pulls Lark *and* the ``atelog.lark``
-    package data in; the grammar is reachable inside the zip because
-    ``importlib.resources`` works over ``zipimport``, which is exactly why the
-    parser never uses a ``__file__``-relative path (§3.2).
-    """
+    """Bundle the app, Lark, and grammar into one ``.pyz`` file."""
     if STAGE.exists():
         shutil.rmtree(STAGE)
     STAGE.mkdir(parents=True)
@@ -76,7 +55,7 @@ def build_zipapp() -> Path:
         ]
     )
 
-    # Trim installer bookkeeping - it is dead weight inside a zipapp.
+    # Installer metadata is not needed inside the zipapp.
     for junk in list(STAGE.glob("*.dist-info")) + list(STAGE.glob("bin")):
         shutil.rmtree(junk, ignore_errors=True)
 
@@ -105,9 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="build_release",
         description="Build the offline wheelhouse and the single-file zipapp.",
     )
-    # Mutually exclusive: passing both previously skipped BOTH builds, printed
-    # the verification instructions and exited 0 - a silent no-op that looks
-    # exactly like success.
+    # Only one single-artifact mode may be selected.
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--wheelhouse-only", action="store_true")
     mode.add_argument("--zipapp-only", action="store_true")

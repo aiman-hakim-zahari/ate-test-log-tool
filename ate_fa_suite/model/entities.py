@@ -1,20 +1,4 @@
-"""Domain entities — the ADF-1 intermediate representation (§4 of PROJECT_PLAN).
-
-All types here are **frozen + slotted**:
-
-* *immutable* — hand-off across the parser-worker/UI thread boundary is
-  thread-safe by construction (§2.3);
-* *memory-lean* — ``slots=True`` matters at 10**6 cycles;
-* *hashable* where used as keys.
-
-Every container is a ``tuple`` all the way down, never a ``dict``/``Mapping``:
-a frozen dataclass holding a dict is only *shallowly* immutable, and
-``MappingProxyType`` is unpicklable (which would break the §6.1 claim that the
-message schema is reusable under a future ``multiprocessing`` worker).
-
-Requires Python >= 3.10 — dataclass ``slots=True`` and ``bisect``'s ``key=``
-parameter both land there; ``pyproject.toml`` pins it.
-"""
+"""Immutable domain objects shared by the parser, model, and UI."""
 
 from __future__ import annotations
 
@@ -41,10 +25,7 @@ class LogicState(Enum):
 
 
 class FailCategory(Enum):
-    """Single-vector evidence -> *candidate* categories.
-
-    Honest FA language: one vector can suggest a stuck-at, never prove it.
-    """
+    """Failure categories inferred from one compare record."""
 
     SA0_CANDIDATE = "stuck-at-0 candidate"  # expected 1, captured 0
     SA1_CANDIDATE = "stuck-at-1 candidate"  # expected 0, captured 1
@@ -58,12 +39,7 @@ class FailCategory(Enum):
     def classify(
         expected: LogicState, actual: LogicState, failed: bool
     ) -> FailCategory | None:
-        """Authority policy: the tester's PASS/FAIL flag decides failure
-        *membership* (it is what the comparator recorded — §6.3 ground truth);
-        the states are evidence only for the failure's *kind*.  Contradictions
-        are surfaced as INCONSISTENT, never silently reinterpreted.  Returns
-        None for non-failing compares (masked compares pass by definition).
-        """
+        """Use the result flag for membership and states for the category."""
         if not failed:
             return None
         if expected is LogicState.UNKNOWN:  # masked compare cannot fail
@@ -103,13 +79,7 @@ class WaveShape(Enum):
 
 @dataclass(frozen=True, slots=True)
 class PinTiming:
-    """Optional intra-cycle timing for one pin (a timeset excerpt).
-
-    Offsets are in native timescale units from cycle start; ``None`` = unknown.
-    A pin with no ``PinTiming`` at all renders as the NRZ idealization (§6.3).
-    This is the IR hook a future ADF-1 ``FORMAT`` line or a STIL/VCD adapter
-    fills — the no-IR-change claim holds because the fields exist *now*.
-    """
+    """Optional pin timing offsets, measured from the cycle start."""
 
     shape: WaveShape = WaveShape.NRZ
     drive_on: int | None = None  # d1: drive edge offset
@@ -127,10 +97,7 @@ class PinDef:
 
 @dataclass(frozen=True, slots=True)
 class TimingSet:
-    """Named per-pin timing, selectable per cycle — real tester/STIL patterns
-    switch timesets mid-block.  Resolution chain (§6.3): ``Cycle.timeset`` ->
-    ``TimingSet`` entry for the pin -> ``PinDef.timing`` -> NRZ idealization.
-    """
+    """A named, sorted collection of per-pin timing values."""
 
     name: str
     entries: tuple[tuple[str, PinTiming], ...]  # (pin, timing), sorted
@@ -167,14 +134,7 @@ class Cycle:
 
 @dataclass(frozen=True, slots=True, order=True)
 class BlockId:
-    """Identity of one test-block *invocation*.
-
-    Real flows legally re-run the same pattern (retest loops, multi-corner
-    runs), so the name alone is not unique; the assembler numbers repeats in
-    document order.  ``order=True`` (lexicographic over ``(name, occurrence)``)
-    makes ``WaveKey`` tuples natively sortable/bisectable — required by the
-    sorted wave collections on ``TestRun``.
-    """
+    """A block name plus its 1-based occurrence in the log."""
 
     name: str
     occurrence: int  # 1-based, document order
@@ -189,12 +149,7 @@ class BlockId:
 
 @dataclass(frozen=True, slots=True)
 class VectorLocation:
-    """Unambiguous run-wide address of one cycle.
-
-    Vector numbers and ``T=`` timestamps are unique/monotonic only within their
-    block invocation (§3.1), so every selection, waveform lookup, and
-    cross-reference carries the full triple.
-    """
+    """A cycle address that remains unique when block values restart."""
 
     block: BlockId
     vector: int
@@ -203,18 +158,12 @@ class VectorLocation:
 
 @dataclass(frozen=True, slots=True)
 class FailureEvent:
-    """Flattened row for the failure table: one per failing compare."""
+    """One failure-table row per failing compare."""
 
     location: VectorLocation
     pin: str
-    strobe_time: int
-    """Resolved at assembly via the §6.3 timing chain (``location.time`` +
-    strobe offset; ``== location.time`` when no timing is known).  The
-    renderer never evaluates the chain itself."""
-    cycle_period: int
-    """Local period, resolved at assembly from the neighbouring cycle's time
-    delta (``Cycle`` objects are then discarded); drives mismatch-band width
-    (§6.2)."""
+    strobe_time: int  # cycle time plus the resolved strobe offset
+    cycle_period: int  # local estimate used for mismatch-band width
     expected: LogicState
     actual: LogicState
     category: FailCategory
@@ -245,12 +194,7 @@ unique run-wide."""
 
 @dataclass(frozen=True, slots=True)
 class WaveformSegment:
-    """One contiguous *retained* interval of a pin's history.
-
-    Inside ``[t_start, t_end]`` the value-change semantics apply (no transition
-    => state held).  Outside every segment the data was *discarded* — a
-    different fact from 'held', and it must never render as a waveform.
-    """
+    """One retained interval of a pin's waveform history."""
 
     t_start: int  # inclusive, block-local
     t_end: int  # inclusive, block-local
@@ -258,9 +202,7 @@ class WaveformSegment:
     states: tuple[LogicState, ...]  # parallel to times
 
     def __post_init__(self) -> None:
-        # Invariants live in the model, enforced by __post_init__ raising
-        # ValueError — `assert` vanishes under `python -O`, and builder-side
-        # checks do not guard alternate construction paths.
+        # Validate here so every construction path follows the same rules.
         if not self.times or len(self.times) != len(self.states):
             raise ValueError("segment arrays empty or not parallel")
         if (
@@ -293,12 +235,7 @@ class WaveformSegment:
 
 @dataclass(frozen=True, slots=True)
 class WaveformSeries:
-    """A pin's retained history within one block invocation.
-
-    Disjoint ascending segments (the builder merges overlapping/adjacent +-W
-    retention windows).  The gaps between segments are structural no-data —
-    never interpolated across.
-    """
+    """A pin's sorted, non-overlapping retained waveform segments."""
 
     block: BlockId
     pin: str
@@ -317,7 +254,7 @@ class WaveformSeries:
         return self.segments[i].state_at(t)
 
     def window(self, t0: int, t1: int) -> tuple[WaveformSegment, ...]:
-        # bisect to the overlapping segment range: O(log n) in segment count
+        # Bisect narrows the search before clipping matching segments.
         lo = bisect_left(self.segments, t0, key=lambda s: s.t_end)
         hi = bisect_right(self.segments, t1, key=lambda s: s.t_start)
         return tuple(
@@ -345,14 +282,8 @@ class TestRun:
     blocks: tuple[TestBlockResult, ...]
     failures: tuple[FailureEvent, ...]
 
-    # Three provenance-separated wave collections — never merged: DRV is
-    # programmed stimulus (continuously known by definition), GOT is a
-    # comparator observation (known only at strobes).  Retained fail windows
-    # only; each tuple sorted by WaveKey (BlockId is order=True, so keys
-    # compare naturally) and looked up via the wave_for() bisect helper in
-    # model/waveform.py.  Tuple-backed rather than a Mapping because a frozen
-    # dataclass holding a dict is only shallowly immutable, and
-    # MappingProxyType is unpicklable.
+    # Keep programmed, expected, and captured signals separate. Each tuple is
+    # sorted by (block, pin) for binary-search lookup.
     driven_waves: tuple[WaveformSeries, ...]  # programmed stimulus (DRV)
     expected_waves: tuple[WaveformSeries, ...]  # what the program demanded
     captured_waves: tuple[WaveformSeries, ...]  # comparator captures (GOT)
@@ -379,10 +310,7 @@ class TestRun:
             raise ValueError("timing-set names must be unique")
 
 
-# --- worker -> UI queue messages --------------------------------------------
-# Every message carries the job-generation ID from the §2.3 threading contract:
-# the pump discards any message whose job_id is not the current job's, killing
-# the stale-result-after-cancel/reload race by construction.
+# The UI ignores queue messages whose job_id belongs to an older load.
 
 
 @dataclass(frozen=True, slots=True)

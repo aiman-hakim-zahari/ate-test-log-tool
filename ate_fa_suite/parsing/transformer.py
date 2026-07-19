@@ -1,23 +1,4 @@
-"""``lark.Transformer`` -> ADF-1 dataclasses, plus run assembly (Phase 1 M3).
-
-Two stages live here, and the split matters for Phase 1 M6:
-
-``AteLogTransformer``
-    Bottom-up transformation of a parse tree into the frozen dataclasses of §4.
-    It is the *only* place Lark ``Tree``/``Token`` objects are allowed to
-    escape into.
-
-``assemble_run``
-    Turns the transformed document into the ``TestRun`` root aggregate:
-    assigns ``BlockId`` occurrences in document order, flattens failing
-    compares into ``FailureEvent``s, and resolves the §6.3 timing chain **at
-    assembly time** while ``Cycle`` objects still exist.  Cycles are discarded
-    afterwards; nothing downstream of assembly ever sees one.
-
-Assembly is deliberately a separate function rather than the transformer's
-``document`` method: the chunked path (M6) assembles from *frames*, never from
-a whole-document tree, and must reuse this exact logic or the two paths drift.
-"""
+"""Transform Lark trees into validated application dataclasses."""
 
 from __future__ import annotations
 
@@ -50,39 +31,39 @@ from ate_fa_suite.parsing.validator import (
     parse_timescale,
 )
 
-#: Fallback when a block has exactly one cycle, so no neighbouring delta exists
-#: to resolve a period from.  The renderer clamps band width to a pixel
-#: minimum, so a zero period degrades to the minimum band rather than to
-#: something invented.
+# A single retained cycle has no measurable period.
 UNKNOWN_CYCLE_PERIOD: Final = 0
 
 
-# --- transient carriers ------------------------------------------------------
-# These exist only between transformation and assembly.  They are NOT part of
-# the §4 IR and never cross the thread boundary.
+# These wrappers keep source lines available until validation finishes.
 
 
 @dataclass(frozen=True, slots=True)
-class LocatedCompare:
-    """A ``CompareEvent`` plus the source line it was read from.
-
-    §4's ``CompareEvent`` deliberately carries no ``src_line``, but
-    ``FailureEvent`` requires one.  Rather than degrade a failure's line to its
-    enclosing ``CYCLE`` header (FA engineers want the raw *compare* line), the
-    line rides alongside the spec-shaped ``Cycle`` until assembly builds the
-    ``FailureEvent``s, then is discarded with the cycles.
-    """
-
-    event: CompareEvent
+class LocatedPinDef:
+    definition: PinDef
     src_line: int
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedCycle:
-    """A spec-shaped ``Cycle`` plus the per-compare source lines."""
+class LocatedDrive:
+    event: DriveEvent
+    src_line: int
 
+
+@dataclass(frozen=True, slots=True)
+class LocatedCompare:
+    event: CompareEvent
+    src_line: int
+
+
+LocatedEvent = LocatedDrive | LocatedCompare
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedCycle:
     cycle: Cycle
     compare_lines: tuple[int, ...]  # parallel to cycle.compares
+    events: tuple[LocatedEvent, ...]  # original order, used by validation
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,16 +73,13 @@ class ParsedBlock:
     cycles: tuple[ParsedCycle, ...]
     declared_fail_count: int | None
     declared_fail_vectors: tuple[int, ...]
+    failsummary_line: int | None = None
+    indexed_first_vector: int | None = None
+    indexed_last_vector: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ParsedHeader:
-    """``LogHeader`` plus the magic-line evidence M7's version check needs.
-
-    ``LogHeader`` (§4) has no version field, so the declared ``#ATELOG`` version
-    would otherwise be unrecoverable after transformation.
-    """
-
     header: LogHeader
     magic: str
     major_version: int
@@ -111,26 +89,17 @@ class ParsedHeader:
 
 @dataclass(frozen=True, slots=True)
 class ParsedDocument:
-    """Everything semantic validation needs, BEFORE assembly discards it.
-
-    Validation runs against this, not against ``TestRun``: assembly deliberately
-    drops cycles, passing compares, duplicate ``PINDEF``s and the declared
-    ``FAILSUMMARY`` count (§6.3 requires ``Cycle`` objects be discarded), and
-    every one of those is evidence some M7 rule depends on.  Retaining them on
-    ``TestRun`` instead would violate the discard invariant, so the validation
-    pass moves earlier rather than the evidence moving later.
-    """
-
     header: ParsedHeader
-    pins: tuple[PinDef, ...]  # ALL declarations, duplicates included
+    pins: tuple[PinDef, ...]
     blocks: tuple[ParsedBlock, ...]
+    pin_lines: tuple[int, ...] = ()  # parallel to pins
 
 
 # --- helpers -----------------------------------------------------------------
 
 
 def _line_of(token: Token) -> int:
-    """Source line of a token.  ``propagate_positions=True`` guarantees one."""
+    """Return the source line recorded by Lark."""
     return token.line or 0
 
 
@@ -141,17 +110,20 @@ def state_of(token: str) -> LogicState:
 
 # --- transformer -------------------------------------------------------------
 #
-# Child lists are typed `list[Any]` on purpose. Lark substitutes each rule's
-# transformed value in place bottom-up, so by the time `header` runs its `meta`
-# children are already MetaEntry objects while its MAGIC child is still a
-# Token. No single precise element type exists; the methods narrow explicitly
-# instead.
+# Child lists contain both tokens and values from earlier transformer methods.
 
 
 @dataclass(frozen=True, slots=True)
 class MetaEntry:
     key: str
     value: str
+    src_line: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedFailSummary:
+    count: int
+    vectors: tuple[int, ...]
     src_line: int
 
 
@@ -162,8 +134,7 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
 
     def meta(self, children: list[Any]) -> MetaEntry:
         key_token, value_token = children[0], children[1]
-        # META_KEY carries its colon ("LOT:"); VALUE absorbs the leading space
-        # because it out-matches the ignored whitespace at that position.
+        # META_KEY includes ":" and VALUE can include leading whitespace.
         return MetaEntry(
             key=str(key_token).rstrip(":"),
             value=str(value_token).strip(),
@@ -205,35 +176,42 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
                 ),
             ),
             magic=magic_text,
-            # The MAGIC terminal is /#ATELOG v\d+\.\d+/, so both parts are
-            # guaranteed to be digits by the time we get here.
             major_version=int(major),
             minor_version=int(minor),
             src_line=_line_of(magic),
         )
 
-    def pindef(self, children: list[Any]) -> PinDef:
+    def pindef(self, children: list[Any]) -> LocatedPinDef:
         name_token, direction_token = children[0], children[1]
-        return PinDef(
-            name=str(name_token),
-            direction=PinDirection(str(direction_token)),
+        return LocatedPinDef(
+            definition=PinDef(
+                name=str(name_token),
+                direction=PinDirection(str(direction_token)),
+            ),
+            src_line=_line_of(name_token),
         )
 
     def prologue(
         self, children: list[Any]
-    ) -> tuple[ParsedHeader, tuple[PinDef, ...]]:
+    ) -> tuple[ParsedHeader, tuple[PinDef, ...], tuple[int, ...]]:
         header = next(c for c in children if isinstance(c, ParsedHeader))
-        # Every declaration is kept, duplicates included: "duplicate PINDEF,
-        # first wins" is an M7 warning, and de-duplicating here would destroy
-        # the evidence that there was anything to warn about.
-        pins = tuple(c for c in children if isinstance(c, PinDef))
-        return header, pins
+        located = [c for c in children if isinstance(c, LocatedPinDef)]
+        return (
+            header,
+            tuple(item.definition for item in located),
+            tuple(item.src_line for item in located),
+        )
 
     # -- pin events --
 
-    def drive(self, children: list[Any]) -> DriveEvent:
+    def drive(self, children: list[Any]) -> LocatedDrive:
         name_token, state_token = children[0], children[1]
-        return DriveEvent(pin=str(name_token), state=state_of(str(state_token)))
+        return LocatedDrive(
+            event=DriveEvent(
+                pin=str(name_token), state=state_of(str(state_token))
+            ),
+            src_line=_line_of(name_token),
+        )
 
     def compare(self, children: list[Any]) -> LocatedCompare:
         name_token = children[0]
@@ -247,38 +225,44 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
                 pin=str(name_token),
                 expected=state_of(str(expected_token)),
                 actual=state_of(str(actual_token)),
-                # The tester's flag is stored VERBATIM, never derived from the
-                # states: it decides failure membership (§4 authority policy).
+                # Keep the tester's result; validation reports contradictions.
                 passed=str(result_token) == "PASS",
             ),
             src_line=_line_of(name_token),
         )
 
-    def pin_event(self, children: list[Any]) -> DriveEvent | LocatedCompare:
+    def pin_event(self, children: list[Any]) -> LocatedEvent:
         event = children[0]
-        assert isinstance(event, (DriveEvent, LocatedCompare))
+        assert isinstance(event, (LocatedDrive, LocatedCompare))
         return event
 
     # -- cycles --
 
     def cycle(self, children: list[Any]) -> ParsedCycle:
         vector_token, time_token = children[0], children[1]
-        drives = tuple(c for c in children if isinstance(c, DriveEvent))
-        located = [c for c in children if isinstance(c, LocatedCompare)]
+        events = tuple(
+            c for c in children if isinstance(c, (LocatedDrive, LocatedCompare))
+        )
+        drives = tuple(
+            item.event for item in events if isinstance(item, LocatedDrive)
+        )
+        compares = tuple(
+            item.event for item in events if isinstance(item, LocatedCompare)
+        )
+        compare_lines = tuple(
+            item.src_line for item in events if isinstance(item, LocatedCompare)
+        )
         return ParsedCycle(
             cycle=Cycle(
                 vector=int(str(vector_token)),
                 time=int(str(time_token).removeprefix("T=")),
                 drives=drives,
-                compares=tuple(lc.event for lc in located),
+                compares=compares,
                 src_line=_line_of(vector_token),
-                # ADF-1 v1 has no TIMESET record, so the chain always begins at
-                # None and terminates in the NRZ idealization. The field exists
-                # now so a future FORMAT/TIMESET extension is data, not an IR
-                # change (§6.3).
                 timeset=None,
             ),
-            compare_lines=tuple(lc.src_line for lc in located),
+            compare_lines=compare_lines,
+            events=events,
         )
 
     def cycle_batch(self, children: list[Any]) -> tuple[ParsedCycle, ...]:
@@ -293,52 +277,52 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
     def vector_list(self, children: list[Any]) -> tuple[int, ...]:
         return tuple(int(str(c)) for c in children)
 
-    def failsummary(self, children: list[Any]) -> tuple[int, tuple[int, ...]]:
+    def failsummary(self, children: list[Any]) -> ParsedFailSummary:
         count_token = children[0]
         vectors = next(c for c in children if isinstance(c, tuple))
-        return int(str(count_token)), vectors
+        return ParsedFailSummary(
+            count=int(str(count_token)),
+            vectors=vectors,
+            src_line=_line_of(count_token),
+        )
 
     def block_trailer(
         self, children: list[Any]
-    ) -> tuple[int | None, tuple[int, ...]]:
+    ) -> tuple[int | None, tuple[int, ...], int | None]:
         for child in children:
-            if isinstance(child, tuple) and len(child) == 2:
-                count, vectors = child
-                if isinstance(count, int):
-                    return count, vectors
-        return None, ()  # FAILSUMMARY is optional (a zero-failure block)
+            if isinstance(child, ParsedFailSummary):
+                return child.count, child.vectors, child.src_line
+        return None, (), None
 
     def testblock(self, children: list[Any]) -> ParsedBlock:
         (name, src_line) = children[0]
         cycles = children[1]
-        declared_count, declared_vectors = children[2]
+        declared_count, declared_vectors, summary_line = children[2]
         return ParsedBlock(
             name=name,
             src_line=src_line,
             cycles=cycles,
             declared_fail_count=declared_count,
             declared_fail_vectors=declared_vectors,
+            failsummary_line=summary_line,
         )
 
     def end_log(self, children: list[Any]) -> None:
         return None
 
     def document(self, children: list[Any]) -> ParsedDocument:
-        header, pins = children[0]
+        header, pins, pin_lines = children[0]
         blocks = tuple(c for c in children if isinstance(c, ParsedBlock))
-        return ParsedDocument(header=header, pins=pins, blocks=blocks)
+        return ParsedDocument(
+            header=header, pins=pins, blocks=blocks, pin_lines=pin_lines
+        )
 
 
 # --- assembly ----------------------------------------------------------------
 
 
 def assign_block_ids(names: list[str]) -> list[BlockId]:
-    """Number repeated block names into distinct invocations, document order.
-
-    Real flows legally re-run the same pattern (retest loops, corner re-runs),
-    so the name alone is not unique — this is what keeps two invocations of
-    ``mbist_march_c`` from collapsing into one.
-    """
+    """Number repeated block names in document order."""
     counts: dict[str, int] = {}
     ids: list[BlockId] = []
     for name in names:
@@ -348,31 +332,10 @@ def assign_block_ids(names: list[str]) -> list[BlockId]:
 
 
 def _cycle_periods(cycles: tuple[ParsedCycle, ...]) -> list[int]:
-    """Local period per cycle, from the neighbouring cycles' time deltas.
+    """Estimate each cycle period from its retained neighbours.
 
-    Resolved here because ``Cycle`` objects are discarded after assembly and
-    the renderer must never need them (§6.2 — ``cycle_period`` drives mismatch
-    band width).
-
-    Each neighbouring delta is **normalized by the vector distance** it spans,
-    then the smallest candidate wins.  Adjacent cycles span one vector, so the
-    normalization is a no-op there and this reduces to the raw delta.
-
-    Normalizing is what makes a *capture gap* safe.  A log that jumps between
-    distant failure windows (``multi_fail`` goes 1202 -> 4400) would otherwise
-    hand the cycle at the gap edge a "period" of the whole jump, and §6.2 sizes
-    the mismatch band as a fraction of ``cycle_period`` — painting a band
-    thousands of times too wide.  Taking the smallest *raw* neighbouring delta
-    fixes that only while some other cycle sits nearby; with a block holding
-    just two captured failures (vectors 1 and 100) BOTH neighbours span the gap
-    and the raw minimum is still the whole jump.  Dividing by the vector
-    distance removes the dependence on a nearby cycle existing: 100000 ns over
-    99 vectors is a 1010 ns period, which is an estimate rather than a
-    measurement, but an estimate of the right magnitude.
-
-    A block with a single cycle has no delta at all and gets
-    ``UNKNOWN_CYCLE_PERIOD``; the renderer clamps band width to a pixel
-    minimum, so that degrades to the minimum band rather than to an invention.
+    Normalize by vector distance so a discarded range does not look like one
+    unusually long cycle.
     """
     times = [pc.cycle.time for pc in cycles]
     vectors = [pc.cycle.vector for pc in cycles]
@@ -387,7 +350,6 @@ def _cycle_periods(cycles: tuple[ParsedCycle, ...]) -> list[int]:
             vector_span = abs(vectors[j] - vectors[i])
             if time_span > 0 and vector_span > 0:
                 candidates.append(time_span // vector_span)
-        # A per-vector period that floors to zero is not a usable period.
         usable = [c for c in candidates if c > 0]
         periods.append(min(usable) if usable else UNKNOWN_CYCLE_PERIOD)
     return periods
@@ -398,14 +360,8 @@ def assemble_run(
     timing_sets: tuple[TimingSet, ...] = (),
     warnings: tuple[str, ...] = (),
 ) -> TestRun:
-    """``ParsedDocument`` -> ``TestRun``, resolving timing at assembly time.
-
-    The three wave collections are left empty here: building them is Phase 2
-    milestone 3.  Everything the failure table and clustering need is populated.
-    """
-    # First declaration wins, matching M7's deterministic duplicate-PINDEF rule.
-    # A plain dict comprehension would silently keep the LAST, quietly
-    # disagreeing with the warning the validator emits about the same log.
+    """Build the immutable run while cycle timing is still available."""
+    # setdefault keeps the first declaration.
     pins_by_name: dict[str, PinDef] = {}
     for pin in document.pins:
         pins_by_name.setdefault(pin.name, pin)
@@ -433,8 +389,6 @@ def assemble_run(
                 if category is None:
                     continue  # a passing compare is not a failure
 
-                # §6.3 timing chain, evaluated ONCE, here, while cycles exist.
-                # The renderer consumes only the resolved values below.
                 timing = resolve_timing(
                     pin=compare.pin,
                     timeset_name=cycle.timeset,
@@ -459,11 +413,21 @@ def assemble_run(
                 block_fail_count += 1
 
         vectors = [pc.cycle.vector for pc in parsed.cycles]
+        first_vector = (
+            parsed.indexed_first_vector
+            if parsed.indexed_first_vector is not None
+            else (vectors[0] if vectors else 0)
+        )
+        last_vector = (
+            parsed.indexed_last_vector
+            if parsed.indexed_last_vector is not None
+            else (vectors[-1] if vectors else 0)
+        )
         blocks.append(
             TestBlockResult(
                 id=block_id,
-                first_vector=vectors[0] if vectors else 0,
-                last_vector=vectors[-1] if vectors else 0,
+                first_vector=first_vector,
+                last_vector=last_vector,
                 fail_count=block_fail_count,
                 declared_fail_vectors=parsed.declared_fail_vectors,
             )
@@ -474,7 +438,7 @@ def assemble_run(
         pins=document.pins,
         blocks=tuple(blocks),
         failures=tuple(failures),
-        # Phase 2 M3 populates these; empty is honest, not a placeholder.
+        # Waveform construction is implemented in Phase 2.
         driven_waves=(),
         expected_waves=(),
         captured_waves=(),
@@ -484,11 +448,7 @@ def assemble_run(
 
 
 def _strobe_time(cycle_time: int, timing: PinTiming | None) -> int:
-    """Resolved strobe instant: cycle start + strobe offset.
-
-    Equals the cycle time exactly when no timing is known — the NRZ
-    idealization ADF-1 v1 renders and documents.
-    """
+    """Return cycle time plus an optional strobe offset."""
     if timing is None or timing.strobe is None:
         return cycle_time
     return cycle_time + timing.strobe

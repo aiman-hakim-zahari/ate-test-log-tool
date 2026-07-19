@@ -1,7 +1,4 @@
-"""Phase 2 stubs — classifier, clustering, waveform builder, filters, exports.
-
-Skipped by design in Step 0.  Gate for Step 3: pure unit tests, no display.
-"""
+"""Planned Phase 2 domain tests."""
 
 from __future__ import annotations
 
@@ -16,7 +13,7 @@ pytestmark = [
     pytest.mark.skip(reason="Phase 2 — Step 3; see docs/ROADMAP.md"),
 ]
 
-#: 6 expected x 6 actual x 2 flags = 72 cases, exhaustively.
+# Six expected states x six actual states x two result flags.
 TRUTH_TABLE = list(
     itertools.product(LogicState, LogicState, (True, False))
 )
@@ -29,12 +26,7 @@ TRUTH_TABLE = list(
 def test_classify_truth_table_is_exhaustive(
     expected: LogicState, actual: LogicState, failed: bool
 ) -> None:
-    """All 72 combinations pinned down.
-
-    The authority policy: the tester's PASS/FAIL flag decides failure
-    MEMBERSHIP, the states decide only the KIND, and contradictions surface as
-    INCONSISTENT rather than being silently reinterpreted.
-    """
+    """Cover every state and result-flag combination."""
 
 
 def test_non_masked_pass_with_disagreeing_states_is_a_warning() -> None:
@@ -103,10 +95,7 @@ def test_io_pin_yields_disjoint_driven_and_captured_series() -> None:
 
 
 def test_timing_chain_is_resolved_at_assembly_not_at_render() -> None:
-    """Cycle.timeset -> TimingSet entry -> PinDef.timing -> NRZ idealization,
-    evaluated ONCE while Cycle objects still exist.  Drive edges and strobe
-    placement are baked into transition times, FailureEvent.strobe_time is
-    stamped, and the cycles are then discarded."""
+    """Resolve timeset and pin defaults before cycles are discarded."""
 
 
 def test_strobe_time_defaults_to_cycle_time_when_timing_is_unknown() -> None:

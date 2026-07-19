@@ -1,24 +1,4 @@
-"""Zipapp proof (PROJECT_PLAN Verification item 6).
-
-Run with the **bare** interpreter of a venv that has nothing pip-installed::
-
-    python tools/check_zipapp.py dist/ate_fa_suite.pyz
-
-It asserts, in order:
-
-1. ``lark`` is NOT importable from the ambient environment — otherwise the whole
-   proof is meaningless, because the app would be borrowing an installed Lark
-   rather than the one bundled in the archive;
-2. the zipapp runs and prints its banner;
-3. with only the ``.pyz`` on ``sys.path``, ``ate_fa_suite`` imports **from
-   inside the archive**, ``atelog.lark`` is served through
-   ``importlib.resources``, and Lark parses with it.
-
-Step 3 is the one that catches a packaging regression: ``importlib.resources``
-works over ``zipimport``, which is exactly why the parser never uses a
-``__file__``-relative path — and nothing else in the suite would notice if that
-broke.
-"""
+"""Verify that the zipapp includes Lark, the package, and its grammar."""
 
 from __future__ import annotations
 

@@ -1,12 +1,4 @@
-"""Observable application state + commands (Phase 3).
-
-The ViewModel owns *all* presentation state — current filter, selected failure,
-zoom window — and exposes it through the ``events`` pub-sub.  It holds the
-immutable ``TestRun`` handed up from the parser thread and never mutates it.
-
-Everything here is testable headless; ``tkinter`` is not importable from this
-layer (§2.3).
-"""
+"""Observable presentation state and application commands."""
 
 from __future__ import annotations
 
@@ -35,9 +27,7 @@ class AppViewModel:
         self._run: TestRun | None = None
         self._selected: VectorLocation | None = None
 
-        #: Monotonic job-generation ID (§2.3).  Incremented on every load or
-        #: cancel; the pump discards worker messages from superseded jobs,
-        #: which is what kills the stale-``ParseComplete``-after-cancel race.
+        # Increment on load or cancel so late worker messages can be ignored.
         self._job_generation = 0
 
     @property
@@ -57,6 +47,5 @@ class AppViewModel:
         raise NotImplementedError("Phase 3 M3 — see docs/ROADMAP.md")
 
     def select(self, location: VectorLocation | None) -> None:
-        """Select a failure.  Carries the full ``VectorLocation`` triple — a
-        bare vector or timestamp is not a run-wide address (§3.1)."""
+        """Select a failure by its full block, vector, and time location."""
         raise NotImplementedError("Phase 3 M4 — see docs/ROADMAP.md")

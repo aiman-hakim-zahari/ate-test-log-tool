@@ -1,9 +1,4 @@
-"""Ranked fail-signature panel (Phase 3 milestone 4).
-
-Shows clusters in 8D-report language — "83% of failures: SA0-candidate on
-DQ[7:0], vectors 1200-1299" — and clicking one applies the corresponding filter
-to the failure table.
-"""
+"""Ranked fail-signature panel with click-to-filter behavior."""
 
 from __future__ import annotations
 

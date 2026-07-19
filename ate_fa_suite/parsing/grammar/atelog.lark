@@ -1,15 +1,4 @@
-// ============================================================================
-// ADF-1 — the ATE Datalog Format.  Grammar for the ATE FA Suite.
-//
-//   parser="lalr", lexer="contextual", start=[...six entry points...]
-//
-// The `document` rule is composed FROM the chunk-mode fragment rules, not
-// duplicated alongside them.  All six entry points are exposed through Lark's
-// multi-start `start=[...]`, so the strict whole-file path and the chunked
-// framing path (§6.1) share every single production: an edit to any rule below
-// changes both parse paths at once, which makes strict/chunked drift
-// structurally impossible.  See docs/LOG_FORMAT_SPEC.md.
-// ============================================================================
+// ADF-1 grammar shared by the strict and framed parsers.
 
 document: prologue testblock+ end_log
 
@@ -41,20 +30,8 @@ STATE: /[01XZLH]/
 PIN_NAME: /[A-Za-z_][A-Za-z0-9_\[\]]*/
 BLOCK_ID: /[a-z][a-z0-9_]*/
 
-// Comments ride on NEWLINE — deliberately, and there is NO `%ignore COMMENT`.
-// This terminal absorbs runs of line terminators INCLUDING comment-only lines
-// (indented or not) and blank lines, and handles CRLF (Windows tester dumps).
-// A trailing comment is the optional group before its own newline.
-//
-// Why not `%ignore COMMENT`: that naive approach only supports TRAILING
-// comments.  A standalone comment line leaves an orphan NEWLINE token in a
-// parser state that expects a construct, which LALR rejects.  Consuming the
-// comment and its newline as ONE token makes that orphan impossible.
-//
-// It also removes any need for a VALUE priority: on metadata lines the
-// contextual lexer expects only VALUE, so `//` there is literal value text.
-//
-// One documented limit: no comment may precede the `#ATELOG` magic line.
+// NEWLINE also consumes blank and comment-only lines. This keeps standalone
+// comments attached to the preceding record and accepts both LF and CRLF.
 NEWLINE: /((\/\/[^\r\n]*)?\r?\n[ \t]*)+/
 
 %import common.INT

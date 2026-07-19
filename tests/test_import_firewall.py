@@ -1,22 +1,4 @@
-"""The §2.3 import firewall — installed in Step 0, green at every gate after.
-
-The rule: nothing under ``parsing/``, ``model/``, ``viewmodel/``, ``services/``
-imports ``tkinter``; nothing under ``view/`` imports ``lark``.
-
-Enforced by **walking the AST** of every module file, not by probing
-``sys.modules``.  Two reasons, both learned the hard way:
-
-* an AST walk catches *conditional* and *function-local* imports, which a
-  runtime probe misses entirely;
-* an AST walk is immune to test-ordering contamination — once any test imports
-  ``tkinter``, a ``sys.modules`` probe reports it as imported forever.
-
-A ``sys.modules`` check survives below as a supplementary smoke test, run in a
-**subprocess** so it is actually meaningful rather than order-dependent.
-
-``__main__.py`` is deliberately exempt: composing the layers is precisely the
-composition root's job.
-"""
+"""AST checks that keep parser and UI dependencies in their own layers."""
 
 from __future__ import annotations
 

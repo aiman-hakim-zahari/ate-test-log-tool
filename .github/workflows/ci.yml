@@ -11,19 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Source-tree checks. windows-latest because that is the deployment target -
-  # fab-floor lab PCs - and CRLF/DPI/Tk behaviour differs there.
-  # ---------------------------------------------------------------------------
+  # Run source checks on the Windows deployment target.
   test:
     name: pytest + mypy (py${{ matrix.python-version }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        # 3.10 is the declared floor (dataclass slots=True, bisect key=, PEP 604
-        # at runtime all land there) and has never yet executed - a green run on
-        # it is a Step 1 gate condition. 3.14 is the local development version.
+        # Test both the minimum and local development Python versions.
         python-version: ["3.10", "3.12", "3.14"]
 
     steps:
@@ -48,12 +43,7 @@ jobs:
       - name: Import firewall (explicit, so a breach is obvious in the log)
         run: pytest tests/test_import_firewall.py -v
 
-  # ---------------------------------------------------------------------------
-  # The deployment proofs. These are the tests an editable install CANNOT give
-  # you: an editable install bypasses packaging entirely, and an internet-enabled
-  # venv cannot prove an offline property because pip would silently download
-  # the missing dependency.
-  # ---------------------------------------------------------------------------
+  # Build artifacts and verify that they work without network access.
   release-proofs:
     name: offline wheelhouse + zipapp
     runs-on: windows-latest
@@ -79,8 +69,7 @@ jobs:
           if (-not ($wheels -match '^ate_fa_suite')) { throw "app wheel missing" }
           if (-not ($wheels -match '^lark'))         { throw "lark wheel missing" }
 
-      # Verification item 5: --no-index means anything missing from the
-      # wheelhouse fails LOUDLY rather than being fetched from PyPI.
+      # --no-index proves the wheelhouse contains every dependency.
       - name: Offline install into a throwaway venv (--no-index)
         shell: pwsh
         run: |
@@ -92,11 +81,7 @@ jobs:
         shell: pwsh
         run: .\.venv-offline\Scripts\python.exe tools/smoke_offline.py
 
-      # Verification item 6: the zipapp must run from a venv with NOTHING
-      # pip-installed - the true single-file deployment. The proof lives in a
-      # real script rather than an inline `python -c`, because a multi-line -c
-      # inside a YAML block carries the YAML indentation into Python and dies
-      # with IndentationError.
+      # Run the zipapp from an empty environment.
       - name: Zipapp proof from a bare venv (nothing pip-installed)
         shell: pwsh
         run: |

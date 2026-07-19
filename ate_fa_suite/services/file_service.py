@@ -1,8 +1,4 @@
-"""Open / recent-files / export services (Phase 3 milestone 1, Phase 2 M5).
-
-Pure filesystem work with no Tk dependency — the *dialog* lives in the view, the
-policy lives here, which keeps recent-file handling and export testable headless.
-"""
+"""Filesystem helpers for recent files and exports."""
 
 from __future__ import annotations
 

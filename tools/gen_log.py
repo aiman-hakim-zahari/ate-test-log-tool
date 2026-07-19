@@ -1,21 +1,5 @@
-"""Synthetic ADF-1 log generator — the perf corpus and property-test oracle.
+"""Generate deterministic ADF-1 logs for tests and performance checks.
 
-Two jobs, and the second is the important one:
-
-1. Produce a deterministic multi-hundred-MB corpus for the parse-throughput
-   baseline::
-
-       python tools/gen_log.py --cycles 1000000 --pins 16 --fail-rate 0.0005 \\
-           --seed 42 -o sample_logs/perf_1m.atelog
-
-2. Act as the **oracle** for the Phase 1 property test.  ``generate()`` returns
-   the exact set of failures it injected, so the test can assert that parsing
-   the emitted log yields precisely those ``FailureEvent``s with matching
-   vectors — a round-trip check no hand-written golden can give you.
-
-Determinism: everything derives from a single ``random.Random(seed)``, and the
-log is streamed to the output handle rather than accumulated, so a 10**6-cycle
-corpus costs constant memory.
 """
 
 from __future__ import annotations
@@ -27,9 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Sequence, TextIO
 
-#: States a failing capture may take.  Weighted towards strong-level mismatches
-#: because that is what real silicon defects mostly look like; the exotic
-#: captures still appear often enough to exercise every FailCategory branch.
+# Weighted failure captures used by the synthetic generator.
 FAIL_CAPTURES: Final[tuple[tuple[str, int], ...]] = (
     ("flip", 70),  # strong opposite level -> SA0/SA1 candidate
     ("X", 12),  # floating / contention
@@ -43,10 +25,7 @@ DEFAULT_PERIOD: Final = 1000  # native timescale units between cycles
 
 @dataclass(frozen=True, slots=True)
 class InjectedFailure:
-    """One failure the generator deliberately planted.
-
-    The property test compares these against the parsed ``FailureEvent``s.
-    """
+    """One planted failure used as the parser test oracle."""
 
     block: str
     occurrence: int
@@ -58,10 +37,7 @@ class InjectedFailure:
 
 
 def _pin_names(pins: int) -> tuple[tuple[str, str], ...]:
-    """``(name, direction)`` for ``pins`` pins: CLK, RST_N, then a DQ bus.
-
-    The DQ bus is what makes bus collapsing (``DQ3`` -> ``DQ[*]``) testable.
-    """
+    """Create CLK, RST_N, and enough DQ pins to reach ``pins``."""
     if pins < 3:
         raise ValueError("need at least 3 pins (CLK, RST_N and one DQ)")
     names: list[tuple[str, str]] = [("CLK", "IN"), ("RST_N", "IN")]
@@ -90,19 +66,11 @@ def generate(
     period: int = DEFAULT_PERIOD,
     start_vector: int = 1,
 ) -> tuple[InjectedFailure, ...]:
-    """Write a well-formed ADF-1 log to ``out``; return the injected failures.
-
-    ``fail_rate`` is the per-compare probability of a failure, so the expected
-    failure count is roughly ``cycles * (pins - 2) * fail_rate``.
-    """
+    """Write a valid log and return the failures added to it."""
     if not 0.0 <= fail_rate <= 1.0:
         raise ValueError("fail-rate must be in [0, 1]")
     if blocks < 1 or cycles < blocks:
         raise ValueError("need at least one cycle per block")
-    # period == 0 emits every cycle at T=0 and a negative period emits negative
-    # timestamps the grammar cannot lex - either way this function would break
-    # its promise to produce a well-formed ADF-1 log, and both would trip the
-    # monotonic-time fatal check once M7 lands.
     if period <= 0:
         raise ValueError("period must be positive (strictly increasing T=)")
     if start_vector < 0:
@@ -128,9 +96,7 @@ def generate(
     per_block = cycles // blocks
 
     for block_index in range(blocks):
-        # Deliberately reuse ONE pattern name across every block, so that any
-        # consumer keying on the bare name collapses invocations that must stay
-        # separate. BlockId occurrence is the thing that keeps them apart.
+        # Reuse the name to exercise occurrence-based block identity.
         block_name = "synth_pattern"
         occurrence = block_index + 1
         n_cycles = per_block if block_index < blocks - 1 else cycles - per_block * (
@@ -143,8 +109,7 @@ def generate(
         fail_vectors: list[int] = []
 
         for i in range(n_cycles):
-            # Vector numbers and timestamps restart per block invocation - that
-            # is the ADF-1 coordinate rule (§3.1), not an oversight.
+            # Vector and time values restart for each block invocation.
             vector = start_vector + i
             time = i * period
             out.write(f"CYCLE {vector} T={time}\n")
@@ -153,9 +118,7 @@ def generate(
 
             vector_failed = False
             for pin_index, pin in enumerate(dq_pins):
-                # Deliberately NOT hash(pin): str hashing is salted by
-                # PYTHONHASHSEED, which would make "deterministic" a lie across
-                # processes. The pin's index is stable everywhere.
+                # The pin index is stable across processes; hash(pin) is not.
                 expected = "1" if (i + pin_index) & 1 else "0"
                 if rng.random() < fail_rate:
                     actual = _choose_capture(rng, expected)
@@ -183,8 +146,7 @@ def generate(
                 fail_vectors.append(vector)
             out.write("END CYCLE\n")
 
-        # Omit FAILSUMMARY entirely when the block passed: `vector_list`
-        # requires at least one vector, so there is no "zero" spelling.
+        # A passing block omits FAILSUMMARY; its vector list cannot be empty.
         if block_fail_count:
             vectors = ",".join(str(v) for v in fail_vectors)
             out.write(f"FAILSUMMARY {block_fail_count} VECTORS {vectors}\n")
@@ -205,12 +167,7 @@ def write_log(
     period: int = DEFAULT_PERIOD,
     start_vector: int = 1,
 ) -> tuple[InjectedFailure, ...]:
-    """Convenience wrapper: ``generate()`` straight to a file.
-
-    ``newline="\\n"`` is explicit so the corpus is byte-identical on Windows and
-    Linux — CRLF handling is something the tests inject deliberately, never
-    something the platform does behind our back.
-    """
+    """Write a generated log with stable LF line endings."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         return generate(

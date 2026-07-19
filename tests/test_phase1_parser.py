@@ -1,9 +1,4 @@
-"""Phase 1 tests.
-
-M3 (transformer), M4 (generator oracle) and M5 (error mapping) are **active** as
-of Step 1.  M6 (raw-byte framing scanner, truncation salvage) and M7 (two-tier
-semantic validation) remain skipped stubs encoding the Step 2 gate.
-"""
+"""Phase 1 parser, framing, and validation tests."""
 
 from __future__ import annotations
 
@@ -95,9 +90,7 @@ def test_transformer_populates_every_dataclass_field(
 def test_metadata_value_keeps_literal_double_slash(
     multi_fail_run: TestRun,
 ) -> None:
-    """On metadata lines `//` is value text, not a comment — so the LOT value
-    keeps it.  This is the observable consequence of carrying comments on the
-    NEWLINE terminal instead of `%ignore COMMENT`."""
+    """Metadata values may contain a literal double slash."""
     assert "//" in multi_fail_run.header.lot
     assert multi_fail_run.header.lot.startswith("K78842A-07B")
 
@@ -131,9 +124,7 @@ def test_failures_are_attributed_to_the_right_invocation(
 def test_src_line_round_trips_to_the_raw_log_line(
     multi_fail_run: TestRun, multi_fail_lines: list[str]
 ) -> None:
-    """propagate_positions=True exists so a table row links back to the raw
-    line.  Every failure's src_line must land on ITS OWN compare record — not
-    on the enclosing CYCLE header."""
+    """Each failure points to its compare line, not its cycle header."""
     for failure in multi_fail_run.failures:
         raw = multi_fail_lines[failure.src_line - 1]
         assert raw.lstrip().startswith("PIN "), raw
@@ -206,9 +197,7 @@ def test_timescale_is_converted_to_nanoseconds() -> None:
 
 @pytest.mark.parametrize("magnitude", ["NaN", "nan", "1e309", "-1e309", "inf"])
 def test_timescale_rejects_non_finite_values(magnitude: str) -> None:
-    """`float()` accepts "NaN" and overflows "1e309" to inf, and `nan <= 0` is
-    False — so a positivity check ALONE lets both through and every downstream
-    time computation silently becomes nan/inf."""
+    """Values accepted by float() can still be invalid timescales."""
     with pytest.raises(ValidationError):
         parse_timescale(f"{magnitude}ns")
 
@@ -248,10 +237,7 @@ def test_cycle_period_is_resolved_from_neighbouring_cycles(
 def test_cycle_period_ignores_a_gap_between_capture_regions(
     multi_fail_run: TestRun,
 ) -> None:
-    """The golden jumps 1202 -> 4400.  A naive forward delta would hand the
-    cycle at the gap edge a period of the whole jump, and §6.2 sizes the
-    mismatch band as a fraction of cycle_period — painting a band thousands of
-    times too wide.  A gap between capture regions is not a clock period."""
+    """A discarded vector range is not one long clock period."""
     edge = [
         f for f in multi_fail_run.failures
         if f.location.vector in (1202, 4400) and f.location.block.occurrence == 1
@@ -273,9 +259,7 @@ def _two_capture_log(v0: int, t0: int, v1: int, t1: int) -> str:
 
 
 def test_isolated_capture_gap_is_not_treated_as_a_cycle_period() -> None:
-    """Two captured failures 99 vectors apart: BOTH neighbours span the gap, so
-    the smallest RAW delta is still the whole jump.  Normalizing by vector
-    distance is what keeps §6.2 from painting a mismatch band 100x too wide."""
+    """Period estimation divides time gaps by their vector distance."""
     result = LogParser().parse_text(
         _two_capture_log(1, 0, 100, 100_000), job_id=1
     )
@@ -344,12 +328,7 @@ def test_wave_collections_are_empty_until_phase_2(
 @pytest.mark.parametrize("seed", [1, 42, 1337])
 @pytest.mark.parametrize("blocks", [1, 3])
 def test_generated_failures_round_trip_exactly(seed: int, blocks: int) -> None:
-    """Generator emits N seeded failures -> parse -> exactly those N
-    FailureEvents, with matching block invocation, vector, pin and states.
-
-    This is the check no hand-written golden can give you: the oracle knows the
-    ground truth independently of the parser.
-    """
+    """Parsed failures must match the generator's independent record."""
     import io
 
     buffer = io.StringIO()
@@ -416,12 +395,7 @@ def test_declared_failsummary_matches_observed_on_generated_logs() -> None:
 
 @pytest.mark.perf
 def test_parse_throughput_baseline_is_recorded() -> None:
-    """Deselected by default (`-m "not perf"`); run with `pytest -m perf`.
-
-    Records rather than asserts a rate: hardware varies, and a throughput
-    assertion would be a flaky test rather than a baseline.  The recorded
-    figures live in perf_baseline.json via tools/perf_baseline.py.
-    """
+    """Record a rate without asserting hardware-dependent performance."""
     import io
     import time
 
@@ -466,7 +440,7 @@ def test_syntax_error_becomes_positioned_parse_failed() -> None:
 def test_truncated_golden_maps_to_parse_failed_at_the_break() -> None:
     """The strict path rejects truncated input BY DESIGN; salvage is M6."""
     path = SAMPLE_LOGS / "truncated.atelog"
-    result = LogParser().parse(path, job_id=9)
+    result = LogParser(chunked=False).parse(path, job_id=9)
     assert isinstance(result, ParseFailed)
     assert result.job_id == 9
 
@@ -479,7 +453,9 @@ def test_truncated_golden_maps_to_parse_failed_at_the_break() -> None:
 def test_parse_failed_carries_the_offending_source_line() -> None:
     """FA engineers always want the raw line, so it rides on the message rather
     than requiring the UI to re-read the file."""
-    result = LogParser().parse(SAMPLE_LOGS / "truncated.atelog", job_id=1)
+    result = LogParser(chunked=False).parse(
+        SAMPLE_LOGS / "truncated.atelog", job_id=1
+    )
     assert isinstance(result, ParseFailed)
     assert result.context.strip().startswith("PIN ")
 
@@ -527,9 +503,7 @@ def test_validation_error_carries_its_line() -> None:
 
 
 def test_parse_never_raises_for_malformed_input() -> None:
-    """Truncate a golden at many offsets: every one must come back as a typed
-    message, never an exception.  A crash on a half-written tester dump is the
-    failure mode this whole design exists to avoid."""
+    """Many truncation points must all return typed results."""
     text = (SAMPLE_LOGS / "multi_fail.atelog").read_text(encoding="utf-8")
     parser = LogParser()
     for cut in range(0, len(text), 97):
@@ -585,13 +559,9 @@ def test_parse_complete_records_elapsed_time() -> None:
     assert result.elapsed_s >= 0.0
 
 
-def test_chunked_path_is_not_yet_wired() -> None:
-    """Guards the Step 1/Step 2 boundary: asking for the chunked path must fail
-    loudly rather than silently falling back to the strict one."""
-    with pytest.raises(NotImplementedError):
-        LogParser(chunked=True).parse(
-            SAMPLE_LOGS / "clean_pass.atelog", job_id=1
-        )
+def test_chunked_path_is_the_default() -> None:
+    result = LogParser().parse(SAMPLE_LOGS / "clean_pass.atelog", job_id=1)
+    assert isinstance(result, ParseComplete)
 
 
 # =============================================================================
@@ -691,122 +661,9 @@ def test_parsed_document_retains_declared_failsummary_count() -> None:
 
 
 def test_validate_accepts_a_parsed_document_not_a_test_run() -> None:
-    """The handoff shape itself: NotImplementedError (rules are Step 2) rather
-    than TypeError proves the signature takes the pre-assembly evidence."""
-    document = transform_only(DUPLICATE_PINDEF_LOG)
-    with pytest.raises(NotImplementedError):
-        validate(document)
-
-
-# =============================================================================
-# M6 — raw-byte framing scanner and truncation salvage (Step 2)
-# =============================================================================
-
-step2 = pytest.mark.skip(reason="Phase 1 M6/M7 — Step 2; see docs/ROADMAP.md")
-
-
-@step2
-def test_frames_reassemble_byte_for_byte() -> None:
-    """The lossless-framing property test: concatenating every emitted frame's
-    raw bytes reproduces the input EXACTLY, original line endings included.
-    This is what proves framing is total — every line in exactly one frame."""
-
-
-@step2
-def test_every_frame_parses_independently_with_its_fragment_rule() -> None:
-    """Each frame is self-contained and maps 1:1 to a fragment start rule of
-    the multi-start grammar."""
-
-
-@step2
-def test_crlf_golden_survives_the_chunked_path() -> None:
-    """Frames are untouched byte slices; normalization exists only in the
-    classification view."""
-
-
-@step2
-def test_comment_containing_end_cycle_does_not_split_a_frame() -> None:
-    """Frame markers are recognized by LEADING TOKEN only, so comment or value
-    text can never fake a boundary."""
-
-
-@step2
-def test_trivia_at_a_batch_boundary_attaches_to_the_preceding_frame() -> None:
-    """Blank/comment lines immediately before and after a ~5k-cycle boundary:
-    a fragment must start with its marker token, so leading trivia would lex to
-    an orphan NEWLINE."""
-
-
-@step2
-def test_truncated_golden_salvages_exactly_three_cycles() -> None:
-    """Every complete cycle before the break is recovered, block identity and
-    the FAILSUMMARY cross-check are preserved, and the tail becomes a
-    TestRun.warnings entry with its ABSOLUTE line number — delivered as a
-    partial ParseComplete, never a crash."""
-
-
-@step2
-def test_frame_relative_error_positions_are_rebased_to_absolute() -> None:
-    """Lark reports positions within the frame it was handed; all user-facing
-    reporting stays absolute in the source file."""
-
-
-# =============================================================================
-# M7 — two-tier semantic validation (Step 2)
-# =============================================================================
-
-
-@step2
-@pytest.mark.parametrize(
-    "rule",
-    [
-        "unsupported_major_version",
-        "non_increasing_vector_within_block",
-        "non_increasing_time_within_block",
-    ],
-)
-def test_fatal_tier_yields_parse_failed(rule: str) -> None:
-    """One malformed golden per rule, asserting tier, message and source line.
-
-    Note the metadata rules (missing/duplicate key, unparseable TIMESCALE) are
-    already active above — they landed in Step 1 because LogHeader cannot be
-    built without them.
-    """
-
-
-@step2
-@pytest.mark.parametrize(
-    "rule",
-    [
-        "duplicate_pindef_first_wins",
-        "undeclared_pin_auto_declared_io",
-        "duplicate_pin_event_in_cycle_first_wins",
-        "reserved_word_as_identifier",
-        "failsummary_count_mismatch",
-        "failsummary_vector_list_mismatch",
-    ],
-)
-def test_recoverable_tier_yields_warning_and_deterministic_rule(rule: str) -> None:
-    """Warning text carries the source line, and the recovery rule is
-    deterministic — not "whatever the dict happened to keep"."""
-
-
-@step2
-def test_failsummary_count_is_pin_granular_not_vector_granular() -> None:
-    """multi_fail block 1 declares `FAILSUMMARY 10 VECTORS 1200,1201,1202,4400,
-    4401`: 10 failing COMPARE LINES across 5 distinct vectors.  A validator that
-    conflated the two would warn on a correct log — so assert the well-formed
-    golden produces NO FAILSUMMARY warning."""
-
-
-@step2
-def test_failsummary_checks_are_reported_as_separate_warnings() -> None:
-    """A log with a right count and a wrong VECTORS list must warn about the
-    vector list ONLY, naming which witness disagreed."""
-
-
-@step2
-def test_model_invariants_are_not_delegated_to_the_validator() -> None:
-    """WaveformSegment/WaveformSeries/TimingSet invariants live in the model as
-    __post_init__ ValueErrors: `assert` vanishes under `python -O`, and
-    builder-side checks do not guard alternate construction paths."""
+    document = transform_only(
+        (SAMPLE_LOGS / "clean_pass.atelog").read_text(encoding="utf-8")
+    )
+    report = validate(document)
+    assert report.document == document
+    assert report.warnings == ()

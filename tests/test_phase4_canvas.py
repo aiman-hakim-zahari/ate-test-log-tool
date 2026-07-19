@@ -1,10 +1,4 @@
-"""Phase 4 stubs — the canvas introspection list from §5 Phase 4 Verification.
-
-Skipped by design in Step 0.  Gate for Steps 5 and 6.  Every test here is a
-canvas *introspection* test: render a known series, then assert item counts and
-coordinates via ``canvas.find_withtag`` / ``canvas.coords`` — no screenshots, no
-eyeballing.
-"""
+"""Planned Phase 4 canvas tests."""
 
 from __future__ import annotations
 
@@ -37,9 +31,7 @@ def test_empty_window_yields_hatch_only_and_zero_wave_items() -> None: ...
 
 
 def test_segment_only_in_the_widened_margin_renders_nothing() -> None:
-    """floor/ceil widen the integer query so edge data is never lost, but a
-    segment present ONLY because of that widening must be skipped outright —
-    not half-clamped into a reversed line or a backward-moving paint cursor."""
+    """A segment outside the real viewport must not be half-clamped into view."""
 
 
 def test_all_display_coordinates_are_clamped_on_both_sides() -> None:
@@ -51,9 +43,7 @@ def test_all_display_coordinates_are_clamped_on_both_sides() -> None:
 
 
 def test_busy_column_exits_at_the_final_transition_level() -> None:
-    """The run following a busy column sits at the LAST state's y.  Dropping
-    later transitions would leave the wave at a stale level until the next
-    visible edge — wrong data, not just an aliasing artifact."""
+    """A coalesced pixel column must finish at its last state."""
 
 
 def test_busy_column_emits_exactly_one_busy_marker() -> None: ...

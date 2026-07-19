@@ -1,9 +1,4 @@
-"""Searchable failure table (Phase 3 milestone 3).
-
-UI-side hygiene from §6.1 item 4: batched inserts (``INSERT_BATCH`` rows per
-tick), paging above ``PAGE_THRESHOLD`` rows, and a debounced search box — the
-table never receives 100k rows in one tick.
-"""
+"""Searchable, paged failure table."""
 
 from __future__ import annotations
 

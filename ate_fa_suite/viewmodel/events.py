@@ -1,9 +1,4 @@
-"""Minimal observer / pub-sub (Phase 3 milestone 1).
-
-Views subscribe and re-render; they never hold state or business logic.  This is
-the whole of the "MVVM-lite" machinery — about thirty lines, deliberately not a
-framework.
-"""
+"""A small typed publish-subscribe helper for ViewModel events."""
 
 from __future__ import annotations
 

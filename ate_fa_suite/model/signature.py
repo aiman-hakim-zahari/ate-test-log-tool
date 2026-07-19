@@ -1,15 +1,4 @@
-"""Fail-signature clustering (Phase 2 milestone 2) and filter predicates (M4).
-
-Every failure is normalized into a signature tuple — *(block invocation,
-collapsed pin group, fail category, vector-window bucket)* — then clustered and
-ranked by share, producing 8D-report language automatically:
-
-    "83% of failures: SA0-candidate on DQ[7:0], vectors 1200-1299."
-
-``FailSignature`` carries its ``BlockId`` because buckets are only comparable
-*within one invocation*: vector numbers restart per block, so clustering across
-blocks by bare vector number would merge unrelated failures (§3.1).
-"""
+"""Fail-signature clustering and shared filter predicates."""
 
 from __future__ import annotations
 
@@ -22,14 +11,13 @@ from ate_fa_suite.model.entities import (
     TestRun,
 )
 
-#: Vector-window width for bucketing: ``vector // SIGNATURE_BUCKET``.
+# Number of vectors in one signature bucket.
 SIGNATURE_BUCKET: Final = 100
 
-#: Bus-member pattern: ``DQ3`` / ``DQ[3]`` -> group ``DQ[*]``.
+# Matches indexed pin names such as DQ3 and DQ[3].
 BUS_MEMBER_RE: Final = re.compile(r"^(?P<base>[A-Za-z_]\w*?)\[?(?P<index>\d+)\]?$")
 
-#: A filter predicate shared by the table search box and signature-panel
-#: click-to-filter (Phase 2 milestone 4) — composable by ``all()``/``any()``.
+# The table and signature panel use the same predicate type.
 FailurePredicate = Callable[[FailureEvent], bool]
 
 
@@ -44,7 +32,7 @@ def cluster(run: TestRun) -> tuple[SignatureCluster, ...]:
 
 
 def summarize(cluster_: SignatureCluster) -> str:
-    """One 8D-ready sentence for a cluster (used by the FA summary export)."""
+    """Write one report-ready sentence for a cluster."""
     raise NotImplementedError("Phase 2 M5 — see docs/ROADMAP.md")
 
 
@@ -54,5 +42,5 @@ def export_csv(run: TestRun, failures: tuple[FailureEvent, ...]) -> str:
 
 
 def export_fa_summary(run: TestRun) -> str:
-    """Plain-text FA summary: an 8D-ready paragraph per top cluster."""
+    """Create a plain-text failure-analysis summary."""
     raise NotImplementedError("Phase 2 M5 — see docs/ROADMAP.md")

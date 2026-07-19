@@ -18,8 +18,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
-# Runtime dependency: lark ONLY. The GUI uses stdlib tkinter (§1.2 item 5 —
-# fab-floor deployability: no browser, no GPU, no Electron, no network).
+# Tkinter comes from Python, so Lark is the only runtime package.
 dependencies = ["lark>=1.1"]
 
 [project.optional-dependencies]
@@ -34,21 +33,15 @@ Homepage = "https://github.com/aiman-hakim-zahari/ate-test-log-tool"
 [tool.setuptools.packages.find]
 include = ["ate_fa_suite*"]
 
-# §3.2: atelog.lark is DATA, not code. It is declared as package data and read
-# through importlib.resources — never a __file__-relative path — so it keeps
-# working from an installed wheel or a zipapp.
+# Include the grammar in wheels and zipapps.
 [tool.setuptools.package-data]
 "ate_fa_suite.parsing.grammar" = ["*.lark"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Perf baselines are deselected by default: they record a rate rather than
-# assert one, and asserting a throughput on unknown hardware is a flaky test,
-# not a baseline. Run them with `pytest -m perf`.
+# Performance checks are opt-in because hardware changes the measured rate.
 addopts = "-q --strict-markers -m 'not perf'"
-# Domain classes legitimately start with "Test" (TestRun, TestBlockResult, and
-# later TestBlockRef). Narrow class collection so pytest stops trying to collect
-# them; every test in this suite is a plain function.
+# Tests are functions; domain classes may also start with "Test".
 python_classes = ["*TestCase"]
 markers = [
     "phase1: parser core / chunked path (Step 1-2)",
@@ -62,11 +55,7 @@ markers = [
 python_version = "3.10"
 strict = true
 files = ["ate_fa_suite"]
-# The float/int boundary of §6.2 is enforced by these settings: the viewport is
-# float-valued, the model API integer-only, and mypy --strict is what keeps a
-# float time from ever reaching a WaveformSegment.
+# Strict typing keeps floating-point view values out of integer model times.
 warn_unreachable = true
-# lark ships `py.typed`, so no per-module override is needed and none is given:
-# an `ignore_missing_imports` escape hatch here would silently hide real typing
-# errors at the one boundary this project most depends on.
+# Lark provides type information, so missing imports remain errors.
 disallow_any_unimported = true

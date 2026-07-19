@@ -1,9 +1,4 @@
-"""Grammar tests — these PASS in Step 0.
-
-Together they prove the §3.2 grammar is genuinely valid Lark (not a plausible
-looking listing in a design doc), that it parses every well-formed sample log,
-and that it rejects the truncated golden with a positioned error.
-"""
+"""Tests for grammar packaging, fragments, and sample logs."""
 
 from __future__ import annotations
 
@@ -29,11 +24,7 @@ def parser() -> Lark:
 
 
 def test_grammar_loads_as_package_data() -> None:
-    """Loaded through importlib.resources, never a __file__-relative path.
-
-    This is what keeps the grammar working from an installed wheel or the
-    zipapp; a source-tree path would pass here and fail in deployment.
-    """
+    """The installed package must provide the grammar."""
     text = load_grammar_text()
     assert "cycle_batch" in text
     assert "%ignore" in text
@@ -42,12 +33,7 @@ def test_grammar_loads_as_package_data() -> None:
 
 
 def test_grammar_has_no_ignored_comment_terminal() -> None:
-    """Comments ride on NEWLINE deliberately — `%ignore COMMENT` is the bug.
-
-    With `%ignore COMMENT`, a standalone comment line leaves an orphan NEWLINE
-    in a parser state expecting a construct, which LALR rejects.  Guard the
-    decision so a future 'tidy-up' cannot silently reintroduce it.
-    """
+    """Standalone comments are handled by NEWLINE, not a global ignore."""
     text = load_grammar_text()
     ignores = [
         line for line in text.splitlines() if line.strip().startswith("%ignore")
@@ -56,11 +42,7 @@ def test_grammar_has_no_ignored_comment_terminal() -> None:
 
 
 def test_grammar_document_is_composed_from_fragment_rules() -> None:
-    """`document` is built FROM the chunk-mode fragments, not duplicated.
-
-    That composition is what makes strict/chunked drift structurally
-    impossible, so it is worth asserting rather than trusting.
-    """
+    """Strict and framed parsing use the same grammar rules."""
     text = load_grammar_text()
     assert "document: prologue testblock+ end_log" in text
     assert "testblock: testblock_header cycle_batch block_trailer" in text
@@ -69,8 +51,7 @@ def test_grammar_document_is_composed_from_fragment_rules() -> None:
 # --- construction ------------------------------------------------------------
 
 
-#: The smallest input each entry point accepts.  Used to prove all six start
-#: rules are live on ONE parser instance built from ONE grammar file.
+# Smallest valid input for each fragment entry point.
 MINIMAL_FRAGMENTS: dict[str, str] = {
     "prologue": (
         "#ATELOG v1.0\n"
@@ -86,11 +67,7 @@ MINIMAL_FRAGMENTS: dict[str, str] = {
 
 
 def test_parser_exposes_exactly_the_six_start_rules(parser: Lark) -> None:
-    """One grammar file, one Lark instance, six live entry points.
-
-    Asserted behaviourally rather than by poking at Lark internals, so the test
-    keeps its meaning across Lark versions.
-    """
+    """Every configured entry point accepts its smallest valid input."""
     assert set(STARTS) == set(MINIMAL_FRAGMENTS) | {"document"}
     for start, snippet in MINIMAL_FRAGMENTS.items():
         assert parser.parse(snippet, start=start).data == start
@@ -123,28 +100,14 @@ def test_multi_fail_parses(parser: Lark, multi_fail_text: str) -> None:
 
 
 def test_multi_fail_has_a_repeated_block_name(multi_fail_text: str) -> None:
-    """Block names are NOT unique: identity is (name, occurrence).
-
-    The golden re-runs `mbist_march_c`, so anything keying on the bare name
-    collapses two invocations that must stay separate.
-    """
+    """The golden covers repeated block names."""
     assert multi_fail_text.count("TESTBLOCK mbist_march_c") == 2
 
 
 def test_multi_fail_failsummary_arithmetic_is_self_consistent(
     parser: Lark, multi_fail_text: str
 ) -> None:
-    """Every FAILSUMMARY in the golden agrees with the records below it.
-
-    The count is **pin-granular** — failing COMPARE LINES, so one vector with
-    three failing pins contributes three — while VECTORS enumerates the
-    **distinct** vectors having at least one FAIL.  The two are related but not
-    equal, and block 1 (10 compare lines across 5 vectors) is the canonical
-    worked example of the difference.
-
-    This runs in Step 0 so that editing the golden breaks loudly here, rather
-    than silently invalidating Step 2's validator fixtures.
-    """
+    """Summary counts use failed lines; vector lists use unique vectors."""
     tree = parser.parse(multi_fail_text, start="document")
     seen: list[tuple[int, tuple[int, ...]]] = []
 
@@ -254,11 +217,7 @@ def test_end_log_without_trailing_newline(parser: Lark, clean_pass_text: str) ->
 
 
 def test_state_and_int_terminals_coexist(parser: Lark) -> None:
-    """`1` is both a STATE and an INT; only the contextual lexer resolves it.
-
-    `CYCLE 1200` lexes 1200 as INT while `EXP 1` lexes 1 as STATE, in the same
-    grammar — with the standard lexer this grammar would be unbuildable.
-    """
+    """The contextual lexer distinguishes numeric states from integers."""
     tree = parser.parse(
         "CYCLE 1 T=0\nPIN DQ0 EXP 1 GOT 1 PASS\nEND CYCLE\n",
         start="cycle_batch",
@@ -317,18 +276,13 @@ def test_end_log_fragment(parser: Lark, text: str) -> None:
 def test_truncated_golden_is_rejected_by_strict_grammar(
     parser: Lark, truncated_text: str
 ) -> None:
-    """The strict `document` rule requires complete blocks and `END LOG`.
-
-    Rejecting truncated input here is CORRECT: salvage is a chunking-layer
-    behaviour (Phase 1 M6), never a grammar behaviour.
-    """
+    """Strict parsing rejects incomplete blocks; framing handles salvage."""
     with pytest.raises((UnexpectedToken, UnexpectedEOF, UnexpectedInput)) as exc:
         parser.parse(truncated_text, start="document")
 
     error = exc.value
     assert isinstance(error, UnexpectedInput)
-    # The error must POINT AT the break, not merely occur - FA engineers always
-    # want the raw log line.
+    # The error should identify the broken line.
     assert error.line == truncated_text.rstrip("\n").count("\n") + 1
     assert "GOT" in truncated_text.splitlines()[error.line - 1]
 

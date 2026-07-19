@@ -1,21 +1,4 @@
-"""Offline-install proof (PROJECT_PLAN Verification item 5).
-
-Run this from a throwaway venv that was populated with
-
-    pip install --no-index --find-links dist/wheelhouse ate-fa-suite
-
-It asserts the two things an editable install can never prove:
-
-(a) ``atelog.lark`` really ships as **package data** and is reachable through
-    ``importlib.resources`` — not via a ``__file__`` path that happens to work
-    only in a source tree;
-(b) ``tkinter`` genuinely works on the target Windows install — a Tk root can be
-    created and destroyed.
-
-The sample log is embedded here on purpose: ``sample_logs/`` is not installed
-into the wheel, so an external file would test the checkout rather than the
-installed artifact.
-"""
+"""Smoke-test the installed wheel without using the source checkout."""
 
 from __future__ import annotations
 
@@ -46,12 +29,7 @@ END LOG
 
 
 def check_is_the_installed_copy() -> None:
-    """Prove we are testing the ARTIFACT, not the checkout.
-
-    Without this the whole proof is self-deception: run from a repo root with
-    the source tree on ``sys.path`` and every assertion below would pass while
-    exercising the working copy.
-    """
+    """Fail if Python imported the source checkout instead of the artifact."""
     import ate_fa_suite
 
     origin = ate_fa_suite.__file__ or "<namespace package>"
@@ -75,9 +53,7 @@ def check_grammar_ships() -> None:
     parser.parse(SAMPLE, start="document")
     print("  golden log parsed with start='document'")
 
-    # The fragment start rules must ship too - they are what the chunked path
-    # runs on, and a packaging mistake that dropped them would only show up in
-    # production on a large file.
+    # Check the fragment rules used by indexed parsing too.
     parser.parse("END LOG\n", start="end_log")
     print("  fragment start rule 'end_log' available")
 

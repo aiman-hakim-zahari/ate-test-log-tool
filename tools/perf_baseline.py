@@ -1,21 +1,4 @@
-"""Record the Phase 1 M4 parse-throughput baseline.
-
-    python tools/perf_baseline.py                    # default ladder
-    python tools/perf_baseline.py --cycles 2000 8000 24000 --pins 16
-
-Writes ``perf_baseline.json`` next to the repo root and prints a table.  The
-baseline exists so later optimization has something to beat — the plan's own
-framing: *budget, then optimize via §6.1 chunking if needed*.
-
-**Why a ladder instead of the single 10**6-cycle corpus the milestone names.**
-The strict whole-file path builds a complete Lark tree in memory before the
-transformer runs.  Measured peak memory is ~80x the input size, so the nominal
-1M-cycle / 16-pin corpus (~420 MiB of text) would need ~30 GB of RAM and, at the
-measured throughput, over an hour.  It is not runnable on the target hardware,
-so this tool measures a ladder at feasible sizes, reports the per-stage split,
-and extrapolates.  The extrapolation is labelled as such in the output — it is
-not a measurement and must not be quoted as one.
-"""
+"""Measure strict-parser throughput on a practical size ladder."""
 
 from __future__ import annotations
 
@@ -32,8 +15,7 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Running this as a script puts tools/ on sys.path, not the repo root, so the
-# `tools.gen_log` import below would fail. Bootstrap the root explicitly.
+# Add the repository root when this file is run directly.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -46,7 +28,7 @@ from tools.gen_log import generate  # noqa: E402
 
 DEFAULT_LADDER = (2_000, 8_000, 24_000)
 
-#: The corpus Phase 1 M4 nominally names, used only for the extrapolation.
+# Target corpus size used for extrapolation.
 NOMINAL_CYCLES = 1_000_000
 
 
@@ -82,8 +64,7 @@ def measure(cycles: int, pins: int, fail_rate: float, seed: int) -> Sample:
     run = assemble_run(document)
     t3 = time.perf_counter()
 
-    # The baseline is only meaningful if the parse was CORRECT - a fast wrong
-    # answer is not a throughput result.
+    # Verify correctness before recording the timing.
     if len(run.failures) != len(injected):
         raise SystemExit(
             f"baseline aborted: parsed {len(run.failures)} failures, "

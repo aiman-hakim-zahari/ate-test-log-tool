@@ -1,14 +1,4 @@
-"""Composition root — ``python -m ate_fa_suite [file]``.
-
-This module is the *only* place allowed to import across the §2.3 firewall in
-both directions: composing the layers is precisely its job.  The firewall test
-therefore checks the five layer packages and deliberately exempts this file.
-
-Until Phase 3 lands, running the app prints a clear placeholder banner rather
-than a traceback (Verification item 4) — and that same banner is what the
-single-file zipapp prints from a venv with nothing pip-installed, which is the
-Verification item 6 proof.
-"""
+"""Command-line entry point and future GUI composition root."""
 
 from __future__ import annotations
 
@@ -30,8 +20,7 @@ ATE Test Log Visualizer & Diagnostics Suite v{version}
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point.  Returns a process exit code; never raises for the
-    not-yet-implemented GUI."""
+    """Print the current project status and return an exit code."""
     args = sys.argv[1:] if argv is None else argv
 
     from ate_fa_suite import __version__
