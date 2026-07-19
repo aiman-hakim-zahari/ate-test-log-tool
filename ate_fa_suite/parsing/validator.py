@@ -80,9 +80,33 @@ class ValidationReport:
     warnings: tuple[str, ...] = ()
 
 
-def parse_timescale(value: str) -> float:
-    """``"1ns"`` -> ``1.0`` (nanoseconds).  Fatal-tier on an unknown unit."""
-    raise NotImplementedError("Phase 1 M7 — see docs/ROADMAP.md")
+def parse_timescale(value: str, src_line: int = 0) -> float:
+    """``"1ns"`` -> ``1.0`` (nanoseconds).  Fatal-tier on an unknown unit.
+
+    Implemented ahead of the rest of M7 because ``LogHeader.timescale_ns`` is a
+    ``float`` and cannot be populated without it; the surrounding two-tier pass
+    is still Step 2 work.
+    """
+    text = value.strip()
+    for suffix, factor in TIMESCALE_UNITS_NS.items():
+        if text.endswith(suffix):
+            magnitude = text[: -len(suffix)].strip()
+            try:
+                scale = float(magnitude)
+            except ValueError:
+                raise ValidationError(
+                    f"TIMESCALE magnitude {magnitude!r} is not a number", src_line
+                ) from None
+            if scale <= 0:
+                raise ValidationError(
+                    f"TIMESCALE must be positive, got {text!r}", src_line
+                )
+            return scale * factor
+    raise ValidationError(
+        f"TIMESCALE {text!r} has no recognized unit "
+        f"({', '.join(TIMESCALE_UNITS_NS)})",
+        src_line,
+    )
 
 
 def validate(run: TestRun) -> ValidationReport:

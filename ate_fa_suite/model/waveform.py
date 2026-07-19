@@ -65,14 +65,32 @@ def resolve_timing(
     pin: str,
     timeset_name: str | None,
     timing_sets: tuple[TimingSet, ...],
-    pindef: PinDef,
+    pindef: PinDef | None,
 ) -> PinTiming | None:
     """The §6.3 resolution chain, evaluated once at assembly time.
 
     ``Cycle.timeset`` -> the ``TimingSet``'s entry for this pin ->
     ``PinDef.timing`` -> ``None`` (the NRZ idealization).
+
+    ``pindef`` is optional because a pin event on an *undeclared* pin is a
+    legal recoverable case (M7 auto-declares it ``IO``), so at assembly time
+    there may genuinely be no declaration to fall back to.
+
+    The chain is evaluated here, once, while ``Cycle`` objects still exist —
+    never at render time.  ADF-1 v1 emits no ``TIMESET`` record, so in practice
+    every lookup falls through to ``None`` today; the path exists so a future
+    ``FORMAT``/``TIMESET`` extension or a STIL/VCD adapter is *data*, not an IR
+    change.
     """
-    raise NotImplementedError("Phase 2 M3 — see docs/ROADMAP.md")
+    if timeset_name is not None:
+        for timing_set in timing_sets:
+            if timing_set.name != timeset_name:
+                continue
+            for entry_pin, timing in timing_set.entries:
+                if entry_pin == pin:
+                    return timing
+            break  # named timeset found but silent on this pin: fall through
+    return pindef.timing if pindef is not None else None
 
 
 def build_waves(

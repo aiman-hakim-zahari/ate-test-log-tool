@@ -42,7 +42,10 @@ include = ["ate_fa_suite*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+# Perf baselines are deselected by default: they record a rate rather than
+# assert one, and asserting a throughput on unknown hardware is a flaky test,
+# not a baseline. Run them with `pytest -m perf`.
+addopts = "-q --strict-markers -m 'not perf'"
 # Domain classes legitimately start with "Test" (TestRun, TestBlockResult, and
 # later TestBlockRef). Narrow class collection so pytest stops trying to collect
 # them; every test in this suite is a plain function.

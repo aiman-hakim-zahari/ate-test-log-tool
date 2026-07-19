@@ -1,0 +1,51 @@
+{
+  "recorded_utc": "2026-07-19T20:41:34Z",
+  "python": "3.14.5",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD64 Family 25 Model 124 Stepping 0, AuthenticAMD",
+  "pins": 16,
+  "fail_rate": 0.0005,
+  "seed": 42,
+  "path": "strict whole-file (document start rule)",
+  "samples": [
+    {
+      "cycles": 2000,
+      "pins": 16,
+      "bytes_": 828282,
+      "lark_s": 1.2448594000015873,
+      "transform_s": 0.2813274000072852,
+      "assemble_s": 0.007175599996116944,
+      "total_s": 1.5333624000049895,
+      "mib_per_s": 0.515149758556119,
+      "failures": 13
+    },
+    {
+      "cycles": 8000,
+      "pins": 16,
+      "bytes_": 3318467,
+      "lark_s": 7.321693200006848,
+      "transform_s": 1.4429399999935413,
+      "assemble_s": 0.034723699995083734,
+      "total_s": 8.799356899995473,
+      "mib_per_s": 0.35965545933741216,
+      "failures": 50
+    },
+    {
+      "cycles": 24000,
+      "pins": 16,
+      "bytes_": 9987082,
+      "lark_s": 26.087086800005636,
+      "transform_s": 4.390313800002332,
+      "assemble_s": 0.10488649999024346,
+      "total_s": 30.58228709999821,
+      "mib_per_s": 0.3114359487928462,
+      "failures": 154
+    }
+  ],
+  "extrapolation": {
+    "note": "computed, NOT measured - see module docstring",
+    "cycles": 1000000,
+    "projected_mib": 396.9,
+    "projected_seconds": 1274.3
+  }
+}
