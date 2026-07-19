@@ -95,9 +95,34 @@ class ParsedBlock:
 
 
 @dataclass(frozen=True, slots=True)
-class ParsedDocument:
+class ParsedHeader:
+    """``LogHeader`` plus the magic-line evidence M7's version check needs.
+
+    ``LogHeader`` (§4) has no version field, so the declared ``#ATELOG`` version
+    would otherwise be unrecoverable after transformation.
+    """
+
     header: LogHeader
-    pins: tuple[PinDef, ...]
+    magic: str
+    major_version: int
+    minor_version: int
+    src_line: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDocument:
+    """Everything semantic validation needs, BEFORE assembly discards it.
+
+    Validation runs against this, not against ``TestRun``: assembly deliberately
+    drops cycles, passing compares, duplicate ``PINDEF``s and the declared
+    ``FAILSUMMARY`` count (§6.3 requires ``Cycle`` objects be discarded), and
+    every one of those is evidence some M7 rule depends on.  Retaining them on
+    ``TestRun`` instead would violate the discard invariant, so the validation
+    pass moves earlier rather than the evidence moving later.
+    """
+
+    header: ParsedHeader
+    pins: tuple[PinDef, ...]  # ALL declarations, duplicates included
     blocks: tuple[ParsedBlock, ...]
 
 
@@ -145,7 +170,7 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
             src_line=_line_of(key_token),
         )
 
-    def header(self, children: list[Any]) -> LogHeader:
+    def header(self, children: list[Any]) -> ParsedHeader:
         magic = children[0]
         entries = [c for c in children if isinstance(c, MetaEntry)]
 
@@ -164,16 +189,27 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
                 _line_of(magic),
             )
 
-        return LogHeader(
-            lot=seen["LOT"].value,
-            wafer=seen["WAFER"].value,
-            device=seen["DEVICE"].value,
-            tester=seen["TESTER"].value,
-            program=seen["PROGRAM"].value,
-            date=seen["DATE"].value,
-            timescale_ns=parse_timescale(
-                seen["TIMESCALE"].value, seen["TIMESCALE"].src_line
+        magic_text = str(magic)
+        major, _, minor = magic_text.removeprefix("#ATELOG v").partition(".")
+
+        return ParsedHeader(
+            header=LogHeader(
+                lot=seen["LOT"].value,
+                wafer=seen["WAFER"].value,
+                device=seen["DEVICE"].value,
+                tester=seen["TESTER"].value,
+                program=seen["PROGRAM"].value,
+                date=seen["DATE"].value,
+                timescale_ns=parse_timescale(
+                    seen["TIMESCALE"].value, seen["TIMESCALE"].src_line
+                ),
             ),
+            magic=magic_text,
+            # The MAGIC terminal is /#ATELOG v\d+\.\d+/, so both parts are
+            # guaranteed to be digits by the time we get here.
+            major_version=int(major),
+            minor_version=int(minor),
+            src_line=_line_of(magic),
         )
 
     def pindef(self, children: list[Any]) -> PinDef:
@@ -183,8 +219,13 @@ class AteLogTransformer(Transformer[Token, ParsedDocument]):
             direction=PinDirection(str(direction_token)),
         )
 
-    def prologue(self, children: list[Any]) -> tuple[LogHeader, tuple[PinDef, ...]]:
-        header = next(c for c in children if isinstance(c, LogHeader))
+    def prologue(
+        self, children: list[Any]
+    ) -> tuple[ParsedHeader, tuple[PinDef, ...]]:
+        header = next(c for c in children if isinstance(c, ParsedHeader))
+        # Every declaration is kept, duplicates included: "duplicate PINDEF,
+        # first wins" is an M7 warning, and de-duplicating here would destroy
+        # the evidence that there was anything to warn about.
         pins = tuple(c for c in children if isinstance(c, PinDef))
         return header, pins
 
@@ -313,27 +354,42 @@ def _cycle_periods(cycles: tuple[ParsedCycle, ...]) -> list[int]:
     the renderer must never need them (§6.2 — ``cycle_period`` drives mismatch
     band width).
 
-    Takes the **smallest positive** delta among the available neighbours rather
-    than simply the forward one.  On contiguous cycles both neighbours give the
-    same answer, so this is identical to a forward delta there.  It differs
-    exactly where it must: a log that jumps between distant failure windows
-    (``multi_fail`` goes 1202 -> 4400) would otherwise hand the cycle at the
-    edge of the gap a "period" of the whole jump, and §6.2 sizes the mismatch
-    band as a fraction of it — painting a band thousands of times too wide. A
-    gap between capture regions is not a clock period.
+    Each neighbouring delta is **normalized by the vector distance** it spans,
+    then the smallest candidate wins.  Adjacent cycles span one vector, so the
+    normalization is a no-op there and this reduces to the raw delta.
+
+    Normalizing is what makes a *capture gap* safe.  A log that jumps between
+    distant failure windows (``multi_fail`` goes 1202 -> 4400) would otherwise
+    hand the cycle at the gap edge a "period" of the whole jump, and §6.2 sizes
+    the mismatch band as a fraction of ``cycle_period`` — painting a band
+    thousands of times too wide.  Taking the smallest *raw* neighbouring delta
+    fixes that only while some other cycle sits nearby; with a block holding
+    just two captured failures (vectors 1 and 100) BOTH neighbours span the gap
+    and the raw minimum is still the whole jump.  Dividing by the vector
+    distance removes the dependence on a nearby cycle existing: 100000 ns over
+    99 vectors is a 1010 ns period, which is an estimate rather than a
+    measurement, but an estimate of the right magnitude.
+
+    A block with a single cycle has no delta at all and gets
+    ``UNKNOWN_CYCLE_PERIOD``; the renderer clamps band width to a pixel
+    minimum, so that degrades to the minimum band rather than to an invention.
     """
     times = [pc.cycle.time for pc in cycles]
+    vectors = [pc.cycle.vector for pc in cycles]
     periods: list[int] = []
-    for i, time_i in enumerate(times):
-        deltas = [
-            delta
-            for delta in (
-                times[i + 1] - time_i if i + 1 < len(times) else 0,
-                time_i - times[i - 1] if i > 0 else 0,
-            )
-            if delta > 0
-        ]
-        periods.append(min(deltas) if deltas else UNKNOWN_CYCLE_PERIOD)
+
+    for i in range(len(times)):
+        candidates: list[int] = []
+        for j in (i - 1, i + 1):
+            if not 0 <= j < len(times):
+                continue
+            time_span = abs(times[j] - times[i])
+            vector_span = abs(vectors[j] - vectors[i])
+            if time_span > 0 and vector_span > 0:
+                candidates.append(time_span // vector_span)
+        # A per-vector period that floors to zero is not a usable period.
+        usable = [c for c in candidates if c > 0]
+        periods.append(min(usable) if usable else UNKNOWN_CYCLE_PERIOD)
     return periods
 
 
@@ -347,7 +403,13 @@ def assemble_run(
     The three wave collections are left empty here: building them is Phase 2
     milestone 3.  Everything the failure table and clustering need is populated.
     """
-    pins_by_name = {pin.name: pin for pin in document.pins}
+    # First declaration wins, matching M7's deterministic duplicate-PINDEF rule.
+    # A plain dict comprehension would silently keep the LAST, quietly
+    # disagreeing with the warning the validator emits about the same log.
+    pins_by_name: dict[str, PinDef] = {}
+    for pin in document.pins:
+        pins_by_name.setdefault(pin.name, pin)
+
     block_ids = assign_block_ids([b.name for b in document.blocks])
 
     failures: list[FailureEvent] = []
@@ -408,7 +470,7 @@ def assemble_run(
         )
 
     return TestRun(
-        header=document.header,
+        header=document.header.header,
         pins=document.pins,
         blocks=tuple(blocks),
         failures=tuple(failures),

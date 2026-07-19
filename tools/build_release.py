@@ -105,8 +105,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="build_release",
         description="Build the offline wheelhouse and the single-file zipapp.",
     )
-    parser.add_argument("--wheelhouse-only", action="store_true")
-    parser.add_argument("--zipapp-only", action="store_true")
+    # Mutually exclusive: passing both previously skipped BOTH builds, printed
+    # the verification instructions and exited 0 - a silent no-op that looks
+    # exactly like success.
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--wheelhouse-only", action="store_true")
+    mode.add_argument("--zipapp-only", action="store_true")
     args = parser.parse_args(argv)
 
     DIST.mkdir(exist_ok=True)

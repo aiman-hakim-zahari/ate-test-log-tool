@@ -150,7 +150,32 @@ class LogParser:
             raise NotImplementedError(
                 "chunked path — Phase 1 M6, see docs/ROADMAP.md"
             )
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            # Real tester output is not always clean UTF-8 (Latin-1 operator
+            # comments, stray control bytes from an aborted transfer).
+            return ParseFailed(
+                job_id=job_id,
+                line=0,
+                column=0,
+                message=(
+                    f"{path.name} is not valid UTF-8 "
+                    f"(byte {error.start}: {error.reason})"
+                ),
+                context="",
+            )
+        except OSError as error:
+            # Missing, locked, or on a dropped network share. The worker MUST
+            # still emit a typed message: an exception here would escape the
+            # thread and leave the GUI's parse job pending forever.
+            return ParseFailed(
+                job_id=job_id,
+                line=0,
+                column=0,
+                message=f"cannot read {path}: {error.strerror or error}",
+                context="",
+            )
         return self.parse_text(text, job_id)
 
     def parse_text(self, text: str, job_id: int) -> ParseComplete | ParseFailed:

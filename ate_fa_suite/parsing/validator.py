@@ -38,10 +38,12 @@ alternate construction paths.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from ate_fa_suite.model.entities import TestRun
+if TYPE_CHECKING:  # import cycle: transformer imports this module at runtime
+    from ate_fa_suite.parsing.transformer import ParsedDocument
 
 #: The seven metadata keys ADF-1 requires, each exactly once.
 REQUIRED_META_KEYS: Final[tuple[str, ...]] = (
@@ -97,6 +99,15 @@ def parse_timescale(value: str, src_line: int = 0) -> float:
                 raise ValidationError(
                     f"TIMESCALE magnitude {magnitude!r} is not a number", src_line
                 ) from None
+            # isfinite BEFORE the positivity test, and not folded into it:
+            # `float()` happily accepts "NaN" and overflows "1e309" to inf, and
+            # `nan <= 0` is False — so a positivity check alone lets both
+            # through and every downstream time computation silently becomes
+            # nan/inf.
+            if not math.isfinite(scale):
+                raise ValidationError(
+                    f"TIMESCALE must be a finite number, got {text!r}", src_line
+                )
             if scale <= 0:
                 raise ValidationError(
                     f"TIMESCALE must be positive, got {text!r}", src_line
@@ -109,9 +120,18 @@ def parse_timescale(value: str, src_line: int = 0) -> float:
     )
 
 
-def validate(run: TestRun) -> ValidationReport:
-    """Run the recoverable tier over an assembled ``TestRun``.
+def validate(document: ParsedDocument) -> ValidationReport:
+    """Run both tiers over a ``ParsedDocument``, **before** assembly.
 
-    Raises ``ValidationError`` for fatal-tier violations.
+    Takes a ``ParsedDocument`` rather than the assembled ``TestRun`` the plan's
+    §5 M7 wording implies ("a post-assembly pass").  That wording cannot be
+    satisfied: assembly deliberately discards the cycles, passing compares,
+    duplicate ``PINDEF``s, magic-line version and declared ``FAILSUMMARY``
+    count that these very rules test, and §6.3 requires ``Cycle`` objects be
+    discarded.  Since the evidence cannot move later without breaking a
+    load-bearing invariant, the pass moves earlier.
+
+    Raises ``ValidationError`` for fatal-tier violations; returns recoverable
+    findings as warnings for ``TestRun.warnings``.
     """
     raise NotImplementedError("Phase 1 M7 — see docs/ROADMAP.md")

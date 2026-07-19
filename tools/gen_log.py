@@ -99,6 +99,14 @@ def generate(
         raise ValueError("fail-rate must be in [0, 1]")
     if blocks < 1 or cycles < blocks:
         raise ValueError("need at least one cycle per block")
+    # period == 0 emits every cycle at T=0 and a negative period emits negative
+    # timestamps the grammar cannot lex - either way this function would break
+    # its promise to produce a well-formed ADF-1 log, and both would trip the
+    # monotonic-time fatal check once M7 lands.
+    if period <= 0:
+        raise ValueError("period must be positive (strictly increasing T=)")
+    if start_vector < 0:
+        raise ValueError("start-vector must be non-negative")
 
     rng = random.Random(seed)
     pin_defs = _pin_names(pins)

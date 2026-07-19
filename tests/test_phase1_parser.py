@@ -24,8 +24,18 @@ from ate_fa_suite.model.entities import (
     TimingSet,
 )
 from ate_fa_suite.model.waveform import resolve_timing
-from ate_fa_suite.parsing.parser import LogParser
-from ate_fa_suite.parsing.validator import ValidationError, parse_timescale
+from ate_fa_suite.parsing.parser import LogParser, build_parser
+from ate_fa_suite.parsing.transformer import (
+    UNKNOWN_CYCLE_PERIOD,
+    AteLogTransformer,
+    ParsedDocument,
+    assemble_run,
+)
+from ate_fa_suite.parsing.validator import (
+    ValidationError,
+    parse_timescale,
+    validate,
+)
 from tools.gen_log import generate
 
 pytestmark = pytest.mark.phase1
@@ -194,6 +204,27 @@ def test_timescale_is_converted_to_nanoseconds() -> None:
     assert parse_timescale("1ms") == 1_000_000.0
 
 
+@pytest.mark.parametrize("magnitude", ["NaN", "nan", "1e309", "-1e309", "inf"])
+def test_timescale_rejects_non_finite_values(magnitude: str) -> None:
+    """`float()` accepts "NaN" and overflows "1e309" to inf, and `nan <= 0` is
+    False — so a positivity check ALONE lets both through and every downstream
+    time computation silently becomes nan/inf."""
+    with pytest.raises(ValidationError):
+        parse_timescale(f"{magnitude}ns")
+
+
+@pytest.mark.parametrize("magnitude", ["NaN", "1e309"])
+def test_non_finite_timescale_is_a_parse_failure_not_a_parse_complete(
+    magnitude: str,
+) -> None:
+    text = (SAMPLE_LOGS / "clean_pass.atelog").read_text(encoding="utf-8")
+    result = LogParser().parse_text(
+        text.replace("TIMESCALE: 1ns", f"TIMESCALE: {magnitude}ns"), job_id=1
+    )
+    assert isinstance(result, ParseFailed)
+    assert "finite" in result.message
+
+
 # --- assembly-time timing resolution (§6.3) ---------------------------------
 
 
@@ -228,6 +259,51 @@ def test_cycle_period_ignores_a_gap_between_capture_regions(
     assert edge, "expected failures on both sides of the gap"
     for failure in edge:
         assert failure.cycle_period == 1000
+
+
+def _two_capture_log(v0: int, t0: int, v1: int, t1: int) -> str:
+    return (
+        "#ATELOG v1.0\nLOT: L\nWAFER: 1\nDEVICE: D\nTESTER: T\nPROGRAM: P\n"
+        "DATE: 2026-07-11T00:00:00\nTIMESCALE: 1ns\n\nPINDEF DQ0 IO\n\n"
+        "TESTBLOCK blk\n"
+        f"CYCLE {v0} T={t0}\nPIN DQ0 EXP 1 GOT 0 FAIL\nEND CYCLE\n"
+        f"CYCLE {v1} T={t1}\nPIN DQ0 EXP 1 GOT 0 FAIL\nEND CYCLE\n"
+        f"FAILSUMMARY 2 VECTORS {v0},{v1}\nEND TESTBLOCK\nEND LOG\n"
+    )
+
+
+def test_isolated_capture_gap_is_not_treated_as_a_cycle_period() -> None:
+    """Two captured failures 99 vectors apart: BOTH neighbours span the gap, so
+    the smallest RAW delta is still the whole jump.  Normalizing by vector
+    distance is what keeps §6.2 from painting a mismatch band 100x too wide."""
+    result = LogParser().parse_text(
+        _two_capture_log(1, 0, 100, 100_000), job_id=1
+    )
+    assert isinstance(result, ParseComplete)
+    periods = {f.cycle_period for f in result.run.failures}
+    assert periods == {100_000 // 99}  # 1010 ns/vector, not 100000
+
+
+def test_adjacent_cycles_are_unaffected_by_the_normalization() -> None:
+    """Vector distance 1 makes the normalization a no-op, so contiguous logs
+    keep the exact raw delta."""
+    result = LogParser().parse_text(_two_capture_log(7, 7000, 8, 8000), job_id=1)
+    assert isinstance(result, ParseComplete)
+    assert {f.cycle_period for f in result.run.failures} == {1000}
+
+
+def test_single_cycle_block_reports_the_unknown_period_sentinel() -> None:
+    """No neighbour, therefore no delta.  The renderer clamps band width to a
+    pixel minimum, so this degrades to the minimum band, not to an invention."""
+    text = (
+        "#ATELOG v1.0\nLOT: L\nWAFER: 1\nDEVICE: D\nTESTER: T\nPROGRAM: P\n"
+        "DATE: 2026-07-11T00:00:00\nTIMESCALE: 1ns\n\nPINDEF DQ0 IO\n\n"
+        "TESTBLOCK blk\nCYCLE 1 T=0\nPIN DQ0 EXP 1 GOT 0 FAIL\nEND CYCLE\n"
+        "FAILSUMMARY 1 VECTORS 1\nEND TESTBLOCK\nEND LOG\n"
+    )
+    result = LogParser().parse_text(text, job_id=1)
+    assert isinstance(result, ParseComplete)
+    assert result.run.failures[0].cycle_period == UNKNOWN_CYCLE_PERIOD
 
 
 def test_resolve_timing_walks_the_full_chain() -> None:
@@ -461,6 +537,33 @@ def test_parse_never_raises_for_malformed_input() -> None:
         assert isinstance(result, (ParseComplete, ParseFailed))
 
 
+def test_missing_file_becomes_parse_failed_not_an_exception(
+    tmp_path: Path,
+) -> None:
+    """The worker MUST emit a typed message: an exception escaping the parse
+    thread leaves the GUI's job pending forever, with the progress bar stuck."""
+    result = LogParser().parse(tmp_path / "does_not_exist.atelog", job_id=5)
+    assert isinstance(result, ParseFailed)
+    assert result.job_id == 5
+    assert "cannot read" in result.message
+
+
+def test_non_utf8_file_becomes_parse_failed(tmp_path: Path) -> None:
+    """Real tester output is not always clean UTF-8 — Latin-1 operator
+    comments, stray control bytes from an aborted transfer."""
+    path = tmp_path / "latin1.atelog"
+    path.write_bytes(b"#ATELOG v1.0\nLOT: caf\xe9 crash\n")
+    result = LogParser().parse(path, job_id=6)
+    assert isinstance(result, ParseFailed)
+    assert result.job_id == 6
+    assert "UTF-8" in result.message
+
+
+def test_directory_instead_of_file_becomes_parse_failed(tmp_path: Path) -> None:
+    result = LogParser().parse(tmp_path, job_id=1)
+    assert isinstance(result, ParseFailed)
+
+
 def test_empty_input_is_a_clean_parse_failed() -> None:
     result = LogParser().parse_text("", job_id=1)
     assert isinstance(result, ParseFailed)
@@ -489,6 +592,110 @@ def test_chunked_path_is_not_yet_wired() -> None:
         LogParser(chunked=True).parse(
             SAMPLE_LOGS / "clean_pass.atelog", job_id=1
         )
+
+
+# =============================================================================
+# Validation handoff — the evidence M7 needs must survive to the validator
+# =============================================================================
+
+
+def transform_only(text: str) -> ParsedDocument:
+    """Transform without assembling, so tests can inspect the evidence."""
+    tree = build_parser().parse(text, start="document")
+    return AteLogTransformer().transform(tree)
+
+
+DUPLICATE_PINDEF_LOG = """#ATELOG v2.3
+LOT: L
+WAFER: 1
+DEVICE: D
+TESTER: T
+PROGRAM: P
+DATE: 2026-07-11T00:00:00
+TIMESCALE: 1ns
+
+PINDEF DQ0 IO
+PINDEF DQ0 IN
+PINDEF CLK IN
+
+TESTBLOCK blk
+CYCLE 5 T=5000
+PIN CLK DRV 1
+PIN DQ0 EXP 1 GOT 1 PASS
+PIN DQ0 EXP 1 GOT 0 FAIL
+END CYCLE
+CYCLE 6 T=6000
+PIN DQ0 EXP 0 GOT 1 FAIL
+END CYCLE
+FAILSUMMARY 99 VECTORS 5,6
+END TESTBLOCK
+END LOG
+"""
+
+
+def test_parsed_document_retains_the_declared_version() -> None:
+    """LogHeader has no version field, so without this the `#ATELOG` version is
+    unrecoverable and M7's version check is unimplementable."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    assert document.header.magic == "#ATELOG v2.3"
+    assert (document.header.major_version, document.header.minor_version) == (2, 3)
+    assert document.header.src_line == 1
+
+
+def test_parsed_document_retains_duplicate_pindefs() -> None:
+    """De-duplicating at transform time would destroy the evidence that there
+    was anything to warn about."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    assert [p.name for p in document.pins] == ["DQ0", "DQ0", "CLK"]
+
+
+def test_duplicate_pindef_resolves_first_wins_at_assembly() -> None:
+    """M7's deterministic rule is FIRST wins; a plain dict comprehension keeps
+    the LAST, which would quietly disagree with the warning the validator emits
+    about the very same log."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    run = assemble_run(document)
+    assert run.pins[0].direction is PinDirection.IO  # the first declaration
+    # ...and the run still carries both declarations for the validator.
+    assert len([p for p in run.pins if p.name == "DQ0"]) == 2
+
+
+def test_parsed_document_retains_cycles_with_source_lines() -> None:
+    """Monotonic vector/time and duplicate-pin-event checks all need cycles,
+    which assembly discards (§6.3)."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    cycles = document.blocks[0].cycles
+    assert [pc.cycle.vector for pc in cycles] == [5, 6]
+    assert [pc.cycle.time for pc in cycles] == [5000, 6000]
+    assert all(pc.cycle.src_line > 0 for pc in cycles)
+
+
+def test_parsed_document_retains_passing_compares() -> None:
+    """A non-masked PASS with disagreeing states is an M7 warning, so passing
+    compares cannot be dropped before validation."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    first_cycle = document.blocks[0].cycles[0].cycle
+    assert [c.passed for c in first_cycle.compares] == [True, False]
+    assert [d.pin for d in first_cycle.drives] == ["CLK"]
+
+
+def test_parsed_document_retains_declared_failsummary_count() -> None:
+    """TestBlockResult has no field for the DECLARED count — only the observed
+    one and the declared vectors — so the count check needs this."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    block = document.blocks[0]
+    assert block.declared_fail_count == 99  # deliberately wrong in the fixture
+    assert block.declared_fail_vectors == (5, 6)
+    # ...and the observed count genuinely differs, so M7 has something to catch.
+    assert assemble_run(document).blocks[0].fail_count == 2
+
+
+def test_validate_accepts_a_parsed_document_not_a_test_run() -> None:
+    """The handoff shape itself: NotImplementedError (rules are Step 2) rather
+    than TypeError proves the signature takes the pre-assembly evidence."""
+    document = transform_only(DUPLICATE_PINDEF_LOG)
+    with pytest.raises(NotImplementedError):
+        validate(document)
 
 
 # =============================================================================
