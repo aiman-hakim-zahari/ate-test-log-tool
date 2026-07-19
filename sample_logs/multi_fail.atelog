@@ -1,0 +1,106 @@
+#ATELOG v1.0
+// Standalone comment immediately after the magic line. (No comment may PRECEDE
+// the magic: it must be line 1 regardless - the one documented limit of
+// carrying comments on the NEWLINE terminal.)
+LOT: K78842A-07B // on a metadata line `//` is LITERAL value text, not a comment
+WAFER: 14
+DEVICE: S32K344_QFN48
+TESTER: UFLEX-BLR-22
+PROGRAM: s32k_prod_r3.1
+DATE: 2026-07-11T03:14:22
+TIMESCALE: 1ns
+      // indented standalone comment between records
+
+PINDEF CLK IN
+PINDEF RST_N IN     // trailing comment on a pindef
+// comment between pindefs
+PINDEF DQ0 IO
+PINDEF DQ1 IO
+PINDEF DQ2 IO
+PINDEF DQ3 IO
+PINDEF TDO OUT
+
+// ---------------------------------------------------------------------------
+// Invocation 1 of mbist_march_c. Note this same pattern is re-run further down
+// (a retest loop) - block NAMES are not unique, so identity is (name,
+// occurrence) and the two invocations must keep their failures, waves and
+// signatures strictly separate.
+// ---------------------------------------------------------------------------
+TESTBLOCK mbist_march_c   // trailing comment on the block header
+CYCLE 1200 T=1200000
+PIN CLK DRV 1
+PIN RST_N DRV 1
+PIN DQ0 EXP 1 GOT 1 PASS
+// standalone comment INSIDE a cycle, between pin events
+PIN DQ1 EXP 0 GOT 1 FAIL      // SA1 candidate
+PIN DQ2 EXP 1 GOT 0 FAIL      // SA0 candidate
+PIN DQ3 EXP 1 GOT 1 PASS
+END CYCLE
+CYCLE 1201 T=1201000
+PIN CLK DRV 0
+PIN RST_N DRV 1
+PIN DQ0 EXP 0 GOT 0 PASS
+PIN DQ1 EXP 0 GOT 1 FAIL
+PIN DQ2 EXP 1 GOT 0 FAIL
+PIN DQ3 EXP 0 GOT 0 PASS
+END CYCLE
+CYCLE 1202 T=1202000
+PIN CLK DRV 1
+PIN DQ1 EXP 0 GOT 1 FAIL
+PIN DQ2 EXP 1 GOT X FAIL      // captured X -> floating / contention
+END CYCLE
+
+// A second, distant failure window in the same block: retention must emit two
+// DISJOINT segments here, and `state_at` must return None in the gap rather
+// than carrying a held state across a region the tool chose to forget.
+CYCLE 4400 T=4400000
+PIN CLK DRV 0
+PIN DQ0 EXP 1 GOT Z FAIL      // captured Z -> open / tri-state
+PIN DQ3 EXP 0 GOT H FAIL      // captured H -> weak drive
+END CYCLE
+CYCLE 4401 T=4401000
+PIN CLK DRV 1
+PIN DQ0 EXP 1 GOT Z FAIL
+PIN TDO EXP Z GOT 1 FAIL      // expected Z, captured strong 1 -> OTHER
+END CYCLE
+FAILSUMMARY 10 VECTORS 1200,1201,1202,4400,4401
+END TESTBLOCK
+
+// ---------------------------------------------------------------------------
+// Invocation 2: the SAME pattern name, legally re-run. BlockId becomes
+// ("mbist_march_c", 2). Vector numbers and T= timestamps restart, which is
+// exactly why no bare vector, time, pin name or block name is ever a run-wide
+// key.
+// ---------------------------------------------------------------------------
+TESTBLOCK mbist_march_c
+CYCLE 1200 T=1200000
+PIN CLK DRV 1
+PIN DQ1 EXP 0 GOT 1 FAIL      // the same pin fails again on the re-run
+PIN DQ2 EXP 1 GOT 1 PASS
+END CYCLE
+CYCLE 1201 T=1201000
+PIN CLK DRV 0
+PIN DQ1 EXP 0 GOT 1 FAIL
+END CYCLE
+FAILSUMMARY 2 VECTORS 1200,1201
+END TESTBLOCK
+
+// A drive-only block: CLK and RST_N produce a driven series only. Nothing is
+// ever synthesized into the expected or captured collections for them.
+TESTBLOCK scan_chain_a
+CYCLE 1 T=0
+PIN CLK DRV 0
+PIN RST_N DRV 0
+END CYCLE
+CYCLE 2 T=1000
+PIN CLK DRV 1
+PIN RST_N DRV 1
+END CYCLE
+CYCLE 3 T=2000
+PIN CLK DRV 0
+PIN TDO EXP 1 GOT 0 FAIL
+END CYCLE
+FAILSUMMARY 1 VECTORS 3
+END TESTBLOCK
+// standalone comment before END LOG
+END LOG

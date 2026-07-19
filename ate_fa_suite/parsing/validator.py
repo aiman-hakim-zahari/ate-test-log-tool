@@ -1,0 +1,83 @@
+"""Post-assembly semantic validation (Phase 1 milestone 7).
+
+The grammar accepts structurally valid but semantically wrong logs, so this
+pass enforces the rest of the spec under an explicit **two-tier policy**.
+
+Fatal -> ``ParseFailed``
+    * unsupported ``#ATELOG`` major version;
+    * required metadata violated — each of the seven keys exactly once,
+      ``TIMESCALE`` parseable as a valid unit;
+    * non-strictly-increasing vector or time within a block invocation.  The
+      waveform bisects depend on sorted transitions, so this can never be
+      downgraded to a warning.
+
+Recoverable -> ``TestRun.warnings`` + a deterministic rule
+    * duplicate ``PINDEF``                        -> first wins;
+    * pin event on an undeclared pin              -> auto-declare ``IO``, warn;
+    * duplicate pin event for a pin in one cycle  -> first wins;
+    * reserved word used as an identifier where the contextual lexer happened
+      to accept it;
+    * ``FAILSUMMARY`` count mismatches.
+
+``WaveformSegment`` / ``WaveformSeries`` / ``TimingSet`` structural invariants
+are deliberately *not* validated here: they live in the model itself as
+``__post_init__`` checks raising ``ValueError`` (§4), because ``assert``
+statements vanish under ``python -O`` and builder-side checks do not guard
+alternate construction paths.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final
+
+from ate_fa_suite.model.entities import TestRun
+
+#: The seven metadata keys ADF-1 requires, each exactly once.
+REQUIRED_META_KEYS: Final[tuple[str, ...]] = (
+    "LOT",
+    "WAFER",
+    "DEVICE",
+    "TESTER",
+    "PROGRAM",
+    "DATE",
+    "TIMESCALE",
+)
+
+#: ``TIMESCALE`` units accepted by ADF-1 v1, in nanoseconds.
+TIMESCALE_UNITS_NS: Final[dict[str, float]] = {
+    "ps": 0.001,
+    "ns": 1.0,
+    "us": 1000.0,
+    "ms": 1_000_000.0,
+}
+
+
+class ValidationError(Exception):
+    """A *fatal*-tier violation; the caller maps this to ``ParseFailed``."""
+
+    def __init__(self, message: str, line: int, column: int = 0) -> None:
+        super().__init__(message)
+        self.message = message
+        self.line = line
+        self.column = column
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationReport:
+    """Result of the recoverable tier: warnings, each carrying a source line."""
+
+    warnings: tuple[str, ...] = ()
+
+
+def parse_timescale(value: str) -> float:
+    """``"1ns"`` -> ``1.0`` (nanoseconds).  Fatal-tier on an unknown unit."""
+    raise NotImplementedError("Phase 1 M7 — see docs/ROADMAP.md")
+
+
+def validate(run: TestRun) -> ValidationReport:
+    """Run the recoverable tier over an assembled ``TestRun``.
+
+    Raises ``ValidationError`` for fatal-tier violations.
+    """
+    raise NotImplementedError("Phase 1 M7 — see docs/ROADMAP.md")

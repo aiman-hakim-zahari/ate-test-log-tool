@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Source-tree checks. windows-latest because that is the deployment target -
+  # fab-floor lab PCs - and CRLF/DPI/Tk behaviour differs there.
+  # ---------------------------------------------------------------------------
+  test:
+    name: pytest + mypy (py${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+
+      - name: pytest
+        run: pytest -v
+
+      - name: mypy --strict
+        run: mypy --strict ate_fa_suite
+
+      - name: Import firewall (explicit, so a breach is obvious in the log)
+        run: pytest tests/test_import_firewall.py -v
+
+  # ---------------------------------------------------------------------------
+  # The deployment proofs. These are the tests an editable install CANNOT give
+  # you: an editable install bypasses packaging entirely, and an internet-enabled
+  # venv cannot prove an offline property because pip would silently download
+  # the missing dependency.
+  # ---------------------------------------------------------------------------
+  release-proofs:
+    name: offline wheelhouse + zipapp
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip wheel
+
+      - name: Build wheelhouse and zipapp
+        run: python tools/build_release.py
+
+      - name: Wheelhouse must contain the app AND Lark
+        shell: pwsh
+        run: |
+          $wheels = Get-ChildItem dist/wheelhouse -Filter *.whl | ForEach-Object Name
+          Write-Host "wheelhouse: $($wheels -join ', ')"
+          if (-not ($wheels -match '^ate_fa_suite')) { throw "app wheel missing" }
+          if (-not ($wheels -match '^lark'))         { throw "lark wheel missing" }
+
+      # Verification item 5: --no-index means anything missing from the
+      # wheelhouse fails LOUDLY rather than being fetched from PyPI.
+      - name: Offline install into a throwaway venv (--no-index)
+        shell: pwsh
+        run: |
+          python -m venv .venv-offline
+          .\.venv-offline\Scripts\python.exe -m pip install --no-index --find-links dist/wheelhouse ate-fa-suite
+          .\.venv-offline\Scripts\python.exe -m pip list
+
+      - name: Offline smoke - grammar via importlib.resources + Tk root
+        shell: pwsh
+        run: .\.venv-offline\Scripts\python.exe tools/smoke_offline.py
+
+      # Verification item 6: the zipapp must run from a venv with NOTHING
+      # pip-installed - the true single-file deployment.
+      - name: Zipapp launch from a bare venv (nothing pip-installed)
+        shell: pwsh
+        run: |
+          python -m venv .venv-bare
+          .\.venv-bare\Scripts\python.exe -c "
+          import importlib.util, sys
+          if importlib.util.find_spec('lark'):
+              sys.exit('bare venv already has lark - the zipapp proof would be meaningless')
+          print('confirmed: bare venv has no lark')
+          "
+          .\.venv-bare\Scripts\python.exe dist/ate_fa_suite.pyz
+
+      - name: Zipapp must serve the grammar from inside the archive
+        shell: pwsh
+        run: |
+          .\.venv-bare\Scripts\python.exe -c "
+          import sys
+          sys.path.insert(0, 'dist/ate_fa_suite.pyz')
+          from ate_fa_suite.parsing.parser import build_parser, load_grammar_text
+          assert 'cycle_batch' in load_grammar_text()
+          build_parser().parse('END LOG\n', start='end_log')
+          print('grammar + lark both load from inside the zipapp')
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/wheelhouse/*.whl
+            dist/ate_fa_suite.pyz

@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ate-fa-suite"
+version = "0.1.0"
+description = "ATE Test Log Visualizer & Diagnostics Suite — datalog → waveform reconstruction and fail-signature clustering for failure analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "aiman-hakim-zahari" }]
+keywords = ["ate", "semiconductor", "failure-analysis", "datalog", "waveform", "lark"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Manufacturing",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+
+# Runtime dependency: lark ONLY. The GUI uses stdlib tkinter (§1.2 item 5 —
+# fab-floor deployability: no browser, no GPU, no Electron, no network).
+dependencies = ["lark>=1.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "mypy>=1.5"]
+
+[project.scripts]
+ate-fa-suite = "ate_fa_suite.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/aiman-hakim-zahari/ate-test-log-tool"
+
+[tool.setuptools.packages.find]
+include = ["ate_fa_suite*"]
+
+# §3.2: atelog.lark is DATA, not code. It is declared as package data and read
+# through importlib.resources — never a __file__-relative path — so it keeps
+# working from an installed wheel or a zipapp.
+[tool.setuptools.package-data]
+"ate_fa_suite.parsing.grammar" = ["*.lark"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+# Domain classes legitimately start with "Test" (TestRun, TestBlockResult, and
+# later TestBlockRef). Narrow class collection so pytest stops trying to collect
+# them; every test in this suite is a plain function.
+python_classes = ["*TestCase"]
+markers = [
+    "phase1: parser core / chunked path (Step 1-2)",
+    "phase2: domain logic (Step 3)",
+    "phase3: gui shell (Step 4)",
+    "phase4: waveform canvas (Step 5-6)",
+    "perf: performance baselines, not run by default",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["ate_fa_suite"]
+# The float/int boundary of §6.2 is enforced by these settings: the viewport is
+# float-valued, the model API integer-only, and mypy --strict is what keeps a
+# float time from ever reaching a WaveformSegment.
+warn_unreachable = true
+# lark ships `py.typed`, so no per-module override is needed and none is given:
+# an `ignore_missing_imports` escape hatch here would silently hide real typing
+# errors at the one boundary this project most depends on.
+disallow_any_unimported = true

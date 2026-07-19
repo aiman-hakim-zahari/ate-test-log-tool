@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.lark_cache*
+*.tmp
+
+# Generated perf corpora — reproducible from tools/gen_log.py with their seed,
+# so they are never committed (a 1M-cycle corpus is ~100 MB).
+sample_logs/generated*.atelog
+sample_logs/perf_*.atelog

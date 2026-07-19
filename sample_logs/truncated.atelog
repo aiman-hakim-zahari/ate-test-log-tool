@@ -1,0 +1,47 @@
+#ATELOG v1.0
+LOT: K78842A-07B
+WAFER: 14
+DEVICE: S32K344_QFN48
+TESTER: UFLEX-BLR-22
+PROGRAM: s32k_prod_r3.1
+DATE: 2026-07-11T03:14:22
+TIMESCALE: 1ns
+
+PINDEF CLK IN
+PINDEF RST_N IN
+PINDEF DQ0 IO
+PINDEF DQ1 IO
+
+// Real tester dumps truncate - the operator aborts, the disk fills, the FTP
+// transfer dies mid-file. This fixture is that file.
+//
+// It is an EXPECTED-FAILURE fixture for the strict `document` grammar: the
+// whole-file rule requires complete blocks and `END LOG`, so parsing this with
+// start="document" must raise UnexpectedToken/UnexpectedEOF pointing at the
+// break. That rejection is correct behaviour, not a bug.
+//
+// Salvage is a CHUNKING-layer behaviour, never a grammar behaviour: in Phase 1
+// milestone 6 the framing scanner recovers every complete cycle before the
+// break (there are exactly THREE: 1200, 1201, 1202), preserves block identity
+// and the FAILSUMMARY cross-check, and turns the tail into a TestRun.warnings
+// entry on a partial result delivered as ParseComplete - never a crash.
+TESTBLOCK mbist_march_c
+CYCLE 1200 T=1200000
+PIN CLK DRV 1
+PIN RST_N DRV 1
+PIN DQ0 EXP 1 GOT 1 PASS
+PIN DQ1 EXP 0 GOT 1 FAIL
+END CYCLE
+CYCLE 1201 T=1201000
+PIN CLK DRV 0
+PIN DQ0 EXP 0 GOT 0 PASS
+PIN DQ1 EXP 0 GOT 1 FAIL
+END CYCLE
+CYCLE 1202 T=1202000
+PIN CLK DRV 1
+PIN DQ0 EXP 1 GOT 1 PASS
+PIN DQ1 EXP 0 GOT 1 FAIL
+END CYCLE
+CYCLE 1203 T=1203000
+PIN CLK DRV 0
+PIN DQ0 EXP 0 GOT
