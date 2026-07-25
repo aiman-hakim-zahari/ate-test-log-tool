@@ -8,8 +8,10 @@ from typing import Final
 #: How many entries the recent-files list keeps.
 MAX_RECENT: Final = 8
 
-#: The ADF-1 file extension.
-LOG_SUFFIX: Final = ".atelog"
+#: Extensions the Open dialog accepts, in the order they are offered.
+#: A tuple rather than a single string because Phase 5 adds STDF ingestion
+#: alongside ADF-1; ``parsing.ingest.parser_for`` picks the reader per file.
+LOG_SUFFIXES: Final[tuple[str, ...]] = (".atelog", ".stdf", ".std")
 
 
 def recent_files_path() -> Path:
