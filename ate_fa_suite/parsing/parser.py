@@ -44,6 +44,7 @@ from ate_fa_suite.parsing.transformer import (
 )
 from ate_fa_suite.parsing.validator import (
     SUPPORTED_MAJOR_VERSIONS,
+    StatefulValidator,
     ValidationError,
     validate,
 )
@@ -181,14 +182,22 @@ def _rebase_cycle(parsed: ParsedCycle, offset: int) -> ParsedCycle:
     )
 
 
-def _combined_cycle_frame(frames: list[LogFrame]) -> LogFrame:
-    first = frames[0]
-    return LogFrame(
-        kind=FrameKind.CYCLE_BATCH,
-        data=b"".join(frame.data for frame in frames),
-        start_line=first.start_line,
-        start_byte=first.start_byte,
-        block_name=first.block_name,
+def _raise_frame_validation_error(
+    error: ValidationError, frame: LogFrame, job_id: int
+) -> None:
+    relative_line = error.line - frame.start_line + 1
+    raise _FrameParseError(
+        ParseFailed(
+            job_id=job_id,
+            line=error.line,
+            column=error.column,
+            message=error.message,
+            context=(
+                _frame_context(frame, relative_line)
+                if relative_line >= 1
+                else ""
+            ),
+        )
     )
 
 
@@ -286,7 +295,7 @@ class LogParser:
         on_progress: ProgressCallback | None,
         is_cancelled: Callable[[], bool] | None,
     ) -> ParseComplete | ParseFailed:
-        """Index every cycle, then parse only failure retention windows."""
+        """Parse and validate every frame while retaining failure windows."""
         started = time.perf_counter()
         try:
             total_bytes = path.stat().st_size
@@ -300,22 +309,21 @@ class LogParser:
                 context="",
             )
 
-        prologue: tuple[ParsedHeader, tuple[PinDef, ...], tuple[int, ...]] | None = None
+        header: ParsedHeader | None = None
         blocks: list[ParsedBlock] = []
-        warnings: list[str] = []
+        truncation_warnings: list[str] = []
+        validator = StatefulValidator()
 
         block_name: str | None = None
         block_line = 0
         first_vector: int | None = None
         last_vector: int | None = None
-        previous_vector: int | None = None
-        previous_time: int | None = None
         declared_count: int | None = None
         declared_vectors: tuple[int, ...] = ()
         summary_line: int | None = None
-        recent: deque[LogFrame] = deque()
-        retained: list[LogFrame] = []
-        retained_offsets: set[int] = set()
+        recent: deque[ParsedCycle] = deque()
+        retained: list[ParsedCycle] = []
+        retained_vectors: set[int] = set()
         retain_until: int | None = None
         cycle_total = 0
         fail_total = 0
@@ -323,67 +331,49 @@ class LogParser:
         saw_end_log = False
         saw_truncated_tail = False
 
-        def keep(frame: LogFrame) -> None:
-            if frame.start_byte not in retained_offsets:
-                retained.append(frame)
-                retained_offsets.add(frame.start_byte)
+        def keep(cycle: ParsedCycle) -> None:
+            vector = cycle.cycle.vector
+            if vector not in retained_vectors:
+                retained.append(cycle)
+                retained_vectors.add(vector)
 
         def reset_block() -> None:
             nonlocal block_name, block_line, first_vector, last_vector
-            nonlocal previous_vector, previous_time, declared_count
-            nonlocal declared_vectors, summary_line, retain_until
+            nonlocal declared_count, declared_vectors, summary_line, retain_until
             block_name = None
             block_line = 0
             first_vector = None
             last_vector = None
-            previous_vector = None
-            previous_time = None
             declared_count = None
             declared_vectors = ()
             summary_line = None
             retain_until = None
             recent.clear()
             retained.clear()
-            retained_offsets.clear()
+            retained_vectors.clear()
 
         def finish_block() -> None:
             if block_name is None:
                 return
-            parsed_cycles: list[ParsedCycle] = []
-            retained.sort(key=lambda frame: frame.start_byte)
-            groups: list[list[LogFrame]] = []
-            for frame in retained:
-                if (
-                    groups
-                    and groups[-1][-1].start_byte + len(groups[-1][-1].data)
-                    == frame.start_byte
-                ):
-                    groups[-1].append(frame)
-                else:
-                    groups.append([frame])
-            for group in groups:
-                combined = _combined_cycle_frame(group)
-                parsed = cast(tuple[ParsedCycle, ...], _parse_frame(combined, job_id))
-                offset = combined.start_line - 1
-                parsed_cycles.extend(_rebase_cycle(cycle, offset) for cycle in parsed)
-
             blocks.append(
-                ParsedBlock(
-                    name=block_name,
-                    src_line=block_line,
-                    cycles=tuple(parsed_cycles),
-                    declared_fail_count=declared_count,
-                    declared_fail_vectors=declared_vectors,
-                    failsummary_line=summary_line,
-                    indexed_first_vector=first_vector,
-                    indexed_last_vector=last_vector,
+                validator.finalize_block(
+                    ParsedBlock(
+                        name=block_name,
+                        src_line=block_line,
+                        cycles=tuple(retained),
+                        declared_fail_count=declared_count,
+                        declared_fail_vectors=declared_vectors,
+                        failsummary_line=summary_line,
+                        indexed_first_vector=first_vector,
+                        indexed_last_vector=last_vector,
+                    )
                 )
             )
             reset_block()
 
         try:
             with source:
-                for frame in scan_frames(source, batch_cycles=1):
+                for frame in scan_frames(source):
                     if is_cancelled is not None and is_cancelled():
                         return ParseFailed(
                             job_id=job_id,
@@ -399,12 +389,18 @@ class LogParser:
                             _parse_frame(frame, job_id),
                         )
                         offset = frame.start_line - 1
-                        prologue = (
-                            _rebase_header(raw[0], offset),
-                            raw[1],
-                            tuple(line + offset for line in raw[2]),
-                        )
+                        header = _rebase_header(raw[0], offset)
+                        pin_lines = tuple(line + offset for line in raw[2])
+                        try:
+                            validator.normalize_prologue(
+                                header, raw[1], pin_lines
+                            )
+                        except ValidationError as error:
+                            _raise_frame_validation_error(error, frame, job_id)
                     elif frame.kind is FrameKind.BLOCK_START:
+                        name, relative_line = cast(
+                            tuple[str, int], _parse_frame(frame, job_id)
+                        )
                         if block_name is not None:
                             raise _FrameParseError(
                                 ParseFailed(
@@ -418,71 +414,70 @@ class LogParser:
                                     context=_frame_context(frame, 1),
                                 )
                             )
-                        name, relative_line = cast(
-                            tuple[str, int], _parse_frame(frame, job_id)
-                        )
                         block_name = name
                         block_line = frame.start_line + relative_line - 1
+                        validator.begin_block()
                     elif frame.kind is FrameKind.CYCLE_BATCH:
-                        if block_name is None:
-                            _parse_frame(frame, job_id)
-                            raise ValidationError(
-                                "cycle found outside a test block", frame.start_line
-                            )
-                        vector = frame.cycle_vectors[0]
-                        cycle_time = frame.cycle_times[0]
-                        if previous_vector is not None and vector <= previous_vector:
-                            raise _FrameParseError(
-                                ParseFailed(
-                                    job_id=job_id,
-                                    line=frame.start_line,
-                                    column=0,
-                                    message=(
-                                        "cycle vectors must be strictly "
-                                        "increasing within a block"
-                                    ),
-                                    context=_frame_context(frame, 1),
-                                )
-                            )
-                        if previous_time is not None and cycle_time <= previous_time:
-                            raise _FrameParseError(
-                                ParseFailed(
-                                    job_id=job_id,
-                                    line=frame.start_line,
-                                    column=0,
-                                    message=(
-                                        "cycle times must be strictly "
-                                        "increasing within a block"
-                                    ),
-                                    context=_frame_context(frame, 1),
-                                )
-                            )
-                        previous_vector = vector
-                        previous_time = cycle_time
-                        first_vector = (
-                            vector if first_vector is None else first_vector
+                        parsed = cast(
+                            tuple[ParsedCycle, ...],
+                            _parse_frame(frame, job_id),
                         )
-                        last_vector = vector
-                        cycle_total += 1
-                        fail_total += frame.fail_count
-
-                        recent.append(frame)
-                        while (
-                            recent
-                            and vector - recent[0].cycle_vectors[0]
-                            > self._retention_w
-                        ):
-                            recent.popleft()
-
-                        if frame.fail_count:
-                            for nearby in recent:
-                                keep(nearby)
-                            retain_until = max(
-                                retain_until or vector,
-                                vector + self._retention_w,
+                        offset = frame.start_line - 1
+                        rebased = (
+                            _rebase_cycle(cycle, offset) for cycle in parsed
+                        )
+                        if block_name is None:
+                            context_error = ValidationError(
+                                "cycle found outside a test block",
+                                frame.start_line,
                             )
-                        if retain_until is not None and vector <= retain_until:
-                            keep(frame)
+                            _raise_frame_validation_error(
+                                context_error, frame, job_id
+                            )
+                        for parsed_cycle in rebased:
+                            try:
+                                normalized = validator.validate_cycle(
+                                    parsed_cycle
+                                )
+                            except ValidationError as error:
+                                _raise_frame_validation_error(
+                                    error, frame, job_id
+                                )
+
+                            vector = normalized.cycle.vector
+                            first_vector = (
+                                vector
+                                if first_vector is None
+                                else first_vector
+                            )
+                            last_vector = vector
+                            cycle_total += 1
+                            cycle_fails = sum(
+                                not compare.passed
+                                for compare in normalized.cycle.compares
+                            )
+                            fail_total += cycle_fails
+
+                            recent.append(normalized)
+                            while (
+                                recent
+                                and vector - recent[0].cycle.vector
+                                > self._retention_w
+                            ):
+                                recent.popleft()
+
+                            if cycle_fails:
+                                for nearby in recent:
+                                    keep(nearby)
+                                retain_until = max(
+                                    retain_until or vector,
+                                    vector + self._retention_w,
+                                )
+                            if (
+                                retain_until is not None
+                                and vector <= retain_until
+                            ):
+                                keep(normalized)
                     elif frame.kind is FrameKind.BLOCK_TRAILER:
                         raw_count, raw_vectors, raw_line = cast(
                             tuple[int | None, tuple[int, ...], int | None],
@@ -497,6 +492,7 @@ class LogParser:
                         )
                         finish_block()
                     elif frame.kind is FrameKind.END_LOG:
+                        _parse_frame(frame, job_id)
                         if block_name is not None:
                             raise _FrameParseError(
                                 ParseFailed(
@@ -507,13 +503,12 @@ class LogParser:
                                     context=_frame_context(frame, 1),
                                 )
                             )
-                        _parse_frame(frame, job_id)
                         saw_end_log = True
                     elif frame.kind is FrameKind.TRUNCATED_TAIL:
                         saw_truncated_tail = True
                         if block_name is not None:
                             finish_block()
-                        warnings.append(
+                        truncation_warnings.append(
                             f"line {frame.start_line}: truncated input; "
                             "kept complete cycles before this line"
                         )
@@ -537,7 +532,7 @@ class LogParser:
                         )
                         progress_byte = bytes_done
 
-            if prologue is None:
+            if header is None:
                 return ParseFailed(
                     job_id=job_id,
                     line=1,
@@ -561,17 +556,15 @@ class LogParser:
                     message="missing END LOG",
                     context="",
                 )
-            header, pins, pin_lines = prologue
             document = ParsedDocument(
                 header=header,
-                pins=pins,
+                pins=validator.pins,
                 blocks=tuple(blocks),
-                pin_lines=pin_lines,
+                pin_lines=validator.pin_lines,
             )
-            report = validate(document)
             run = assemble_run(
-                report.document,
-                warnings=tuple(warnings) + report.warnings,
+                document,
+                warnings=tuple(truncation_warnings) + validator.warnings,
             )
         except _FrameParseError as error:
             return error.result
