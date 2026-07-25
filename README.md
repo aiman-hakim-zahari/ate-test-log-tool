@@ -37,15 +37,18 @@ The chunked path still sends every complete frame through Lark and validates eve
 - Failure-signature clustering.
 - Filtering and CSV/text exports.
 - The Tkinter desktop interface.
-- Direct STDF, ATDF, STIL, or tester-vendor format adapters.
+- STDF V4-2007 ingestion (`STR` records). This is Phase 5 and is scheduled next, ahead of the interface work.
+- ATDF, STIL, and tester-vendor format adapters.
 
 Running `python -m ate_fa_suite` currently prints a project-status message; it does not open a GUI yet.
 
 ## A note about the input format
 
-ADF-1 (`.atelog`) is a learning format used by this project. It represents a verbose FA re-test log where drive, expected, and captured states are available. It is not a production STDF parser.
+ADF-1 (`.atelog`) is a bench and reference format defined by this project. It represents a verbose FA re-test log where drive, expected, and captured states are all available, which is the highest-fidelity case (Tier A) and a convenient one to develop against.
 
-Production logs are often failure-sparse, while the pattern data needed for a complete waveform may live in a separate file. I do not want the tool to draw signal history that was never recorded, so real-format adapters are future work.
+It is not the only intended input, and an earlier version of these docs overstated why it existed. The claim was that production datalogs cannot supply expected-vs-captured data per pin per cycle. That is true of the STDF `FTR` record and false of `STR` (Scan Test Record), added in STDF V4-2007, which carries `EXP_DATA` and `CAP_DATA` arrays keyed by pin and cycle. The real gap is that no audited open-source tool *renders* that payload as a differential waveform, and that is the gap this project aims at. See `docs/ROADMAP.md` for the correction and the Phase 5 plan.
+
+What remains true: a production log carries no drive data and no passing cycles, so a complete waveform still needs the pattern file, and `STR` itself may log fewer failures than the tester detected. The tool will not draw signal history that was never recorded, so those gaps render as no-data rather than being interpolated.
 
 Example:
 
