@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pickle
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -253,6 +255,40 @@ def test_wave_collections_are_tuples_not_mappings() -> None:
     run = _run()
     for waves in (run.driven_waves, run.expected_waves, run.captured_waves):
         assert isinstance(waves, tuple)
+
+
+def test_model_invariants_remain_active_under_optimized_python() -> None:
+    code = """
+from ate_fa_suite.model.entities import (
+    BlockId, LogicState, PinTiming, TimingSet, WaveformSegment, WaveformSeries
+)
+
+bad_constructors = (
+    lambda: TimingSet("bad", (("B", PinTiming()), ("A", PinTiming()))),
+    lambda: WaveformSegment(0, 10, (0, 0), (LogicState.LOW, LogicState.HIGH)),
+    lambda: WaveformSeries(
+        BlockId("b", 1),
+        "DQ0",
+        (
+            WaveformSegment(10, 20, (10,), (LogicState.LOW,)),
+            WaveformSegment(0, 5, (0,), (LogicState.HIGH,)),
+        ),
+    ),
+)
+for construct in bad_constructors:
+    try:
+        construct()
+    except ValueError:
+        continue
+    raise SystemExit("model invariant disappeared under python -O")
+"""
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 # --- classify: authority policy (the exhaustive table is Phase 2 M1) ---------

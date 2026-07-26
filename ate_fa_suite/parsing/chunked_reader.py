@@ -1,17 +1,13 @@
-"""Split a log into lossless frames and index its cycle headers."""
+"""Split a log into lossless structural frames."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Iterator, Protocol
 
 DEFAULT_BATCH_CYCLES: Final = 5000
 READ_SIZE: Final = 64 * 1024
-
-_CYCLE_RE = re.compile(rb"^CYCLE[ \t]+(\d+)[ \t]+T=(\d+)(?:[ \t]|$)")
-
 
 class FrameKind(Enum):
     PROLOGUE = "prologue"
@@ -32,12 +28,6 @@ class LogFrame:
     data: bytes
     start_line: int
     start_byte: int
-    block_name: str | None = None
-    cycle_count: int = 0
-    cycle_vectors: tuple[int, ...] = ()
-    cycle_times: tuple[int, ...] = ()
-    fail_count: int = 0
-    fail_vectors: tuple[int, ...] = ()
 
     def text(self) -> str:
         return self.data.decode("utf-8")
@@ -78,52 +68,30 @@ def _marker(line: bytes) -> str:
     value = _record(line)
     if not value or value.startswith(b"//"):
         return "trivia"
-    if value.startswith(b"TESTBLOCK") and value[9:10] in (b" ", b"\t"):
+    fields = value.split(None, 2)
+    if fields[0] == b"TESTBLOCK":
         return "block"
-    if _CYCLE_RE.match(value):
+    if fields[0] == b"CYCLE":
         return "cycle"
-    if value.startswith(b"END CYCLE"):
+    if fields[:2] == [b"END", b"CYCLE"]:
         return "cycle_end"
-    if value.startswith(b"FAILSUMMARY"):
+    if fields[0] == b"FAILSUMMARY":
         return "summary"
-    if value.startswith(b"END TESTBLOCK"):
+    if fields[:2] == [b"END", b"TESTBLOCK"]:
         return "block_end"
-    if value.startswith(b"END LOG"):
+    if fields[:2] == [b"END", b"LOG"]:
         return "log_end"
     return "other"
-
-
-def _block_name(line: bytes) -> str | None:
-    fields = _record(line).split()
-    if len(fields) >= 2:
-        return fields[1].decode("ascii", errors="replace")
-    return None
-
-
-def _is_failed_compare(line: bytes) -> bool:
-    value = _record(line)
-    if not value.startswith(b"PIN"):
-        return False
-    value = value.split(b"//", 1)[0]
-    fields = value.split()
-    return (
-        len(fields) == 7
-        and fields[0] == b"PIN"
-        and fields[2] == b"EXP"
-        and fields[4] == b"GOT"
-        and fields[6] == b"FAIL"
-    )
 
 
 def scan_frames(
     source: ByteSource, batch_cycles: int = DEFAULT_BATCH_CYCLES
 ) -> Iterator[LogFrame]:
-    """Stream the input as prologue, block, cycle, trailer, and end frames."""
+    """Stream untouched bytes using leading record tokens for boundaries only."""
     if batch_cycles < 1:
         raise ValueError("batch_cycles must be positive")
 
     kind = FrameKind.PROLOGUE
-    block: str | None = None
     buffer = bytearray()
     frame_line = 1
     frame_byte = 0
@@ -131,54 +99,21 @@ def scan_frames(
     byte_no = 0
 
     in_cycle = False
-    current_vector: int | None = None
-    current_time: int | None = None
-    current_fail_count = 0
     partial_cycle_offset = 0
     partial_cycle_line = 0
     partial_cycle_byte = 0
-
-    vectors: list[int] = []
-    times: list[int] = []
-    fail_vectors: list[int] = []
-    fail_count = 0
-
-    def make_frame(
-        frame_kind: FrameKind,
-        data: bytes,
-        start_line: int,
-        start_byte: int,
-        *,
-        cycle_limit: int | None = None,
-    ) -> LogFrame:
-        count = len(vectors) if cycle_limit is None else cycle_limit
-        return LogFrame(
-            kind=frame_kind,
-            data=data,
-            start_line=start_line,
-            start_byte=start_byte,
-            block_name=block,
-            cycle_count=count if frame_kind is FrameKind.CYCLE_BATCH else 0,
-            cycle_vectors=tuple(vectors[:count]),
-            cycle_times=tuple(times[:count]),
-            fail_count=fail_count if frame_kind is FrameKind.CYCLE_BATCH else 0,
-            fail_vectors=tuple(fail_vectors)
-            if frame_kind is FrameKind.CYCLE_BATCH
-            else (),
-        )
+    completed_cycles = 0
+    saw_closing_marker_in_cycle = False
 
     def reset_frame(
         new_kind: FrameKind, start_line: int, start_byte: int
     ) -> None:
-        nonlocal kind, frame_line, frame_byte, fail_count
+        nonlocal kind, frame_line, frame_byte, completed_cycles
         kind = new_kind
         frame_line = start_line
         frame_byte = start_byte
         buffer.clear()
-        vectors.clear()
-        times.clear()
-        fail_vectors.clear()
-        fail_count = 0
+        completed_cycles = 0
 
     for line in _lines(source):
         try:
@@ -195,7 +130,10 @@ def scan_frames(
         if marker == "block":
             boundary = FrameKind.BLOCK_START
         elif marker == "cycle" and not in_cycle:
-            if kind is not FrameKind.CYCLE_BATCH or len(vectors) >= batch_cycles:
+            if (
+                kind is not FrameKind.CYCLE_BATCH
+                or completed_cycles >= batch_cycles
+            ):
                 boundary = FrameKind.CYCLE_BATCH
         elif (
             marker in ("summary", "block_end")
@@ -207,41 +145,28 @@ def scan_frames(
             boundary = FrameKind.END_LOG
 
         if boundary is not None and buffer:
-            yield make_frame(kind, bytes(buffer), frame_line, frame_byte)
+            yield LogFrame(kind, bytes(buffer), frame_line, frame_byte)
             reset_frame(boundary, line_no, byte_no)
-            if boundary is FrameKind.BLOCK_START:
-                block = _block_name(line)
-            elif boundary is FrameKind.END_LOG:
-                block = None
         elif boundary is not None and not buffer:
             reset_frame(boundary, line_no, byte_no)
-            if boundary is FrameKind.BLOCK_START:
-                block = _block_name(line)
-            elif boundary is FrameKind.END_LOG:
-                block = None
+
+        if boundary is FrameKind.BLOCK_START and in_cycle:
+            in_cycle = False
+            saw_closing_marker_in_cycle = False
 
         if marker == "cycle" and not in_cycle:
-            match = _CYCLE_RE.match(_record(line))
-            if match is not None:
-                current_vector = int(match.group(1))
-                current_time = int(match.group(2))
             in_cycle = True
-            current_fail_count = 0
             partial_cycle_offset = len(buffer)
             partial_cycle_line = line_no
             partial_cycle_byte = byte_no
-        elif in_cycle and _is_failed_compare(line):
-            current_fail_count += 1
         elif marker == "cycle_end" and in_cycle:
             in_cycle = False
-            if current_vector is not None and current_time is not None:
-                vectors.append(current_vector)
-                times.append(current_time)
-                if current_fail_count:
-                    fail_vectors.append(current_vector)
-                    fail_count += current_fail_count
-            current_vector = None
-            current_time = None
+            completed_cycles += 1
+            saw_closing_marker_in_cycle = False
+        elif in_cycle and marker in ("summary", "block_end", "log_end"):
+            # A later structural closer means this is a malformed complete
+            # record, not an incomplete EOF tail eligible for salvage.
+            saw_closing_marker_in_cycle = True
 
         buffer.extend(line)
         byte_no += len(line)
@@ -250,33 +175,27 @@ def scan_frames(
     if not buffer:
         return
 
-    if in_cycle:
+    if in_cycle and not saw_closing_marker_in_cycle:
         complete = bytes(buffer[:partial_cycle_offset])
         if complete:
-            yield make_frame(
-                FrameKind.CYCLE_BATCH,
-                complete,
-                frame_line,
-                frame_byte,
-                cycle_limit=len(vectors),
+            yield LogFrame(
+                FrameKind.CYCLE_BATCH, complete, frame_line, frame_byte
             )
         yield LogFrame(
             kind=FrameKind.TRUNCATED_TAIL,
             data=bytes(buffer[partial_cycle_offset:]),
             start_line=partial_cycle_line,
             start_byte=partial_cycle_byte,
-            block_name=block,
         )
         return
 
-    yield make_frame(kind, bytes(buffer), frame_line, frame_byte)
+    yield LogFrame(kind, bytes(buffer), frame_line, frame_byte)
     if kind is not FrameKind.END_LOG:
         yield LogFrame(
             kind=FrameKind.TRUNCATED_TAIL,
             data=b"",
             start_line=line_no,
             start_byte=byte_no,
-            block_name=block,
         )
 
 
