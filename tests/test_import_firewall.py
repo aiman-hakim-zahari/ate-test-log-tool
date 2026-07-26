@@ -84,6 +84,40 @@ def test_no_module_crosses_the_firewall(package: str) -> None:
     assert not violations, "import firewall breached: " + "; ".join(violations)
 
 
+def test_stdf_reader_imports_only_stdlib() -> None:
+    """The STDF reader's whole deployability argument is that it adds nothing.
+
+    ``lark`` stays the sole runtime dependency, the wheelhouse stays at two
+    wheels, and the zipapp gains no package data — but only while this holds,
+    so it is enforced rather than asserted in prose.
+    """
+    allowed = set(sys.stdlib_module_names) | {"ate_fa_suite"}
+    scanned = 0
+    violations: list[str] = []
+    for path in (PACKAGE_ROOT / "parsing" / "stdf").rglob("*.py"):
+        scanned += 1
+        extra = _imported_roots(path.read_text(encoding="utf-8")) - allowed
+        if extra:
+            rel = path.relative_to(PACKAGE_ROOT).as_posix()
+            violations.append(f"{rel} imports {sorted(extra)}")
+    assert scanned, "no modules scanned under parsing/stdf/"
+    assert not violations, "STDF reader left the stdlib: " + "; ".join(
+        violations
+    )
+
+
+def test_stdf_reader_is_a_subpackage_not_a_layer() -> None:
+    """Its location is load-bearing: ``_module_files`` walks with ``rglob`` so
+    the reader is covered by the ``parsing`` rule, while
+    ``test_every_layer_package_is_covered`` uses non-recursive ``iterdir`` so no
+    ``FORBIDDEN`` entry is needed.  A top-level ``ate_fa_suite/stdf/`` would
+    silently escape the first check and break the second."""
+    assert (PACKAGE_ROOT / "parsing" / "stdf" / "__init__.py").exists()
+    assert not (PACKAGE_ROOT / "stdf").exists()
+    scanned = {p.relative_to(PACKAGE_ROOT).as_posix() for p in _module_files("parsing")}
+    assert "parsing/stdf/parser.py" in scanned
+
+
 def test_ast_walk_detects_a_function_local_import() -> None:
     """Prove the detector is actually strong enough to be worth trusting —
     a sys.modules probe would never see this."""
