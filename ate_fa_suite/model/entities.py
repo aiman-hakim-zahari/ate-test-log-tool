@@ -69,6 +69,11 @@ class LogHeader:
     date: str
     timescale_ns: float
 
+    #: What the time axis counts.  ADF-1 logs real time, so "time"; STDF's
+    #: axis is tester cycles, so an STDF run sets "cycle" and the Phase 4
+    #: ruler labels it accordingly instead of claiming nanoseconds.
+    time_domain: str = "time"
+
 
 class WaveShape(Enum):
     NRZ = "NRZ"
@@ -293,6 +298,11 @@ class TestRun:
     """Log inconsistencies, each with source line: truncation salvage
     (Ph1 M6), FAILSUMMARY count mismatches, INCONSISTENT records, non-masked
     PASS with disagreeing states."""
+
+    source_format: str = "ADF-1"
+    """Which reader produced this run.  An STDF run sets "STDF-V4-2007", where
+    ``FailureEvent.src_line`` is a record ordinal rather than a text line, so
+    the failure table can render "record #N" instead of a misleading "line N"."""
 
     def __post_init__(self) -> None:
         for waves in (
