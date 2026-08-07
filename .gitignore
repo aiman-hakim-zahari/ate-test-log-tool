@@ -14,3 +14,5 @@ venv/
 # so they are never committed (a 1M-cycle corpus is ~100 MB).
 sample_logs/generated*.atelog
 sample_logs/perf_*.atelog
+sample_logs/generated*.stdf
+sample_logs/perf_*.stdf

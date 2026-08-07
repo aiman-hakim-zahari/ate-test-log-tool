@@ -1,0 +1,68 @@
+{
+  "recorded_utc": "2026-08-07T14:58:36Z",
+  "python": "3.14.5",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD64 Family 25 Model 124 Stepping 0, AuthenticAMD",
+  "workload": {
+    "pins": 16,
+    "fail_rate": 0.0005,
+    "seed": 42,
+    "blocks": 1,
+    "period": 1000,
+    "start_vector": 1
+  },
+  "stdf_path": "StdfParser.parse (public file path, little-endian)",
+  "comparison_path": "LogParser.parse_text (strict whole-file)",
+  "timing_scope": "parse only; generation and correctness checks excluded",
+  "stdf_statistic": "median per-parse time across repeated timing batches",
+  "samples": [
+    {
+      "cycles": 2000,
+      "pins": 16,
+      "failures": 13,
+      "adf1_bytes": 828282,
+      "adf1_strict_s": 1.162738499995612,
+      "stdf_bytes": 805,
+      "stdf_s": 0.0009901559998979792,
+      "stdf_min_s": 0.0008488280000165105,
+      "stdf_max_s": 0.0010440999999991618,
+      "stdf_batches": 5,
+      "stdf_repeats_per_batch": 25,
+      "stdf_mib_per_s": 0.7753402744477962,
+      "stdf_cycles_per_s": 2019883.735700304,
+      "elapsed_speedup_vs_adf1_strict": 1174.2982925068522
+    },
+    {
+      "cycles": 8000,
+      "pins": 16,
+      "failures": 50,
+      "adf1_bytes": 3318467,
+      "adf1_strict_s": 9.708209900003567,
+      "stdf_bytes": 1063,
+      "stdf_s": 0.002138180000183638,
+      "stdf_min_s": 0.001897404000046663,
+      "stdf_max_s": 0.0023437759999069387,
+      "stdf_batches": 5,
+      "stdf_repeats_per_batch": 25,
+      "stdf_mib_per_s": 0.47412088704074357,
+      "stdf_cycles_per_s": 3741499.779865548,
+      "elapsed_speedup_vs_adf1_strict": 4540.408150468985
+    },
+    {
+      "cycles": 24000,
+      "pins": 16,
+      "failures": 154,
+      "adf1_bytes": 9987082,
+      "adf1_strict_s": 34.09386399999494,
+      "stdf_bytes": 1792,
+      "stdf_s": 0.0035156000001006758,
+      "stdf_min_s": 0.003111383999930695,
+      "stdf_max_s": 0.0035990439998568034,
+      "stdf_batches": 5,
+      "stdf_repeats_per_batch": 25,
+      "stdf_mib_per_s": 0.48611456791189556,
+      "stdf_cycles_per_s": 6826715.212001569,
+      "elapsed_speedup_vs_adf1_strict": 9697.879166861587
+    }
+  ]
+}

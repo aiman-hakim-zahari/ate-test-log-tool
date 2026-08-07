@@ -45,7 +45,7 @@ of an FA report.
 1. **Click-to-Waveform "Vector Replay"** — the flagship. Click any failure row
    and the canvas reconstructs the digital waveform of the failing pin(s) ±N
    cycles around the failing vector, parsed from a *datalog* (synthetic ADF-1
-   today, real STDF `STR` on the Phase 5 path) rather than a simulation dump.
+   or real STDF V4-2007 `STR`) rather than a simulation dump.
    This single interaction fuses PySTDF's domain (fail records) with GTKWave's
    domain (waveforms).
 2. **Differential waveform lanes** — per pin: *actual* (solid), *expected*
@@ -130,8 +130,8 @@ ate-test-log-tool/
 │       ├── failure_table.py      # searchable ttk.Treeview
 │       ├── signature_panel.py    # ranked cluster summary
 │       └── waveform_canvas.py    # custom Canvas renderer
-├── sample_logs/                  # golden .atelog files
-├── tools/                        # gen_log.py · build_release.py · smoke_offline.py
+├── sample_logs/                  # golden .atelog and binary .stdf files
+├── tools/                        # generators/writers · perf/release verification
 ├── tests/
 ├── docs/
 └── pyproject.toml

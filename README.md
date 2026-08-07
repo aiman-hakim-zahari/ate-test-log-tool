@@ -4,7 +4,7 @@ A small Python learning project for parsing semiconductor ATE test logs and, eve
 
 I started this project to learn how to turn an engineering idea into a well-tested application. The main things I am practicing are formal parsing, streaming large files, data modelling, validation, packaging, and keeping a GUI separate from the core logic.
 
-> Current status: the ADF-1 parser and semantic validation are working. The waveform builder, failure-signature analysis, exports, and GUI are still on the roadmap.
+> Current status: the ADF-1 parser, semantic validation, and STDF V4-2007 `STR` reader are working. The waveform builder, failure-signature analysis, exports, and GUI are still on the roadmap.
 
 ## Why I am building it
 
@@ -27,6 +27,13 @@ Only the first two parts are substantially implemented today.
 - Recovery of complete cycles when a file ends with an incomplete tail.
 - Stable identity for repeated test-block names.
 - Deterministic sample-log generation and malformed test fixtures.
+- A stdlib-only STDF V4-2007 reader for `STR` expected-versus-captured data.
+- A schema-driven STDF writer with little-endian, big-endian, continuation,
+  packed-data, mask-map, missing-data, and truncation goldens.
+- A same-plan ADF-1/STDF round-trip property test proving both readers produce
+  the same format-neutral failure facts.
+- A recorded, repeated-batch STDF parser baseline in
+  `stdf_perf_baseline.json`.
 - Offline wheelhouse and zipapp build tooling.
 
 The chunked path still sends every complete frame through Lark and validates every cycle. The retention window only controls what is stored after validation. An opt-in test exercises this path with a generated one-million cycle log.
@@ -37,10 +44,9 @@ The chunked path still sends every complete frame through Lark and validates eve
 - Failure-signature clustering.
 - Filtering and CSV/text exports.
 - The Tkinter desktop interface.
-- STDF V4-2007 ingestion (`STR` records). This is Phase 5 and is scheduled next, ahead of the interface work.
 - ATDF, STIL, and tester-vendor format adapters.
 
-Running `python -m ate_fa_suite` currently prints a project-status message; it does not open a GUI yet.
+Running `python -m ate_fa_suite` currently prints a project-status message; it does not open a GUI yet. Run `python -m ate_fa_suite --stdf sample_logs/stdf/golden_le.stdf` for the working headless STDF summary.
 
 ## A note about the input format
 
@@ -95,7 +101,7 @@ Run the checks:
 
 ```bash
 python -m pytest
-python -m mypy --strict ate_fa_suite
+python -m mypy --strict ate_fa_suite tools/gen_log.py tools/stdf_writer.py tools/perf_stdf.py
 ```
 
 Generate a sample log:
@@ -105,9 +111,18 @@ python tools/gen_log.py --cycles 5000 --pins 8 --fail-rate 0.001 --seed 42 \
   -o sample_logs/generated.atelog
 ```
 
+Regenerate the deterministic STDF feature corpus in a scratch directory and
+print a headless FA summary:
+
+```bash
+python tools/stdf_writer.py --golden-corpus build/manual-stdf
+python -m ate_fa_suite --stdf build/manual-stdf/golden_le.stdf
+```
+
 ## Using the parser
 
-There is no finished command-line interface yet, but the parser can be used from Python:
+The STDF reader has the headless summary command shown above. The desktop GUI
+is not finished yet, and either parser can also be used directly from Python:
 
 ```python
 from pathlib import Path
@@ -150,9 +165,9 @@ ate_fa_suite/
   services/    background-work boundary for the future GUI
   viewmodel/   presentation state and events
   view/        Tkinter components, mostly planned
-sample_logs/   valid, truncated, and malformed fixtures
+sample_logs/   text fixtures plus the binary STDF feature corpus
 tests/         parser, model, packaging, and architecture tests
-tools/         sample generator and offline release helpers
+tools/         ADF/STDF generators, performance, and release helpers
 docs/          architecture, format specification, and roadmap
 ```
 

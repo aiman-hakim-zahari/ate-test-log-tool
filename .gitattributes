@@ -1,3 +1,8 @@
 # Tests read these fixtures as raw bytes assuming LF; pin checkout so that
 # holds regardless of the machine's core.autocrlf.
 *.atelog text eol=lf
+
+# STDF fixtures are binary.  Disabling text conversion keeps both byte orders
+# and bit-counted maps identical on every checkout.
+*.stdf binary
+*.std binary

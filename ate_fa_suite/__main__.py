@@ -19,6 +19,7 @@ ATE Test Log Visualizer & Diagnostics Suite v{version}
     - STDF V4-2007 reader (stdlib struct only)           python -m ate_fa_suite --stdf FILE
     - Domain entities (frozen, slotted, tuple-backed)    ate_fa_suite/model/entities.py
     - Synthetic log generator                            python tools/gen_log.py --help
+    - STDF writer and golden-corpus generator            python tools/stdf_writer.py --help
     - Release builder (wheelhouse + .pyz zipapp)         python tools/build_release.py
 
   Run the test suite with:  pytest
